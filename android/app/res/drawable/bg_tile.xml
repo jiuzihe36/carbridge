@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 深色 tile（流向图 + 实时指标）：与浅色卡片交替出节奏，无描边无阴影 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="@color/tile" />
+    <corners android:radius="18dp" />
+</shape>

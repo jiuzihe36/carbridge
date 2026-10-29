@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  主按钮的「描边态」：形状与实心主按钮完全一致（胶囊），只把填充换成白色 + 1px hairline。
+  用于「连接已经建立、主按钮变成断开」的时候——此时页面重心应该落在深色流向卡片上，
+  一颗饱和的蓝色大按钮会把注意力抢走。
+
+  注意圆角必须仍是 9999：如果换成次按钮的 11dp，按钮会在"开始 → 断开"之间变形。
+-->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="#1A000000">
+    <item android:id="@android:id/mask">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/on_accent" />
+            <corners android:radius="9999dp" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/card" />
+            <corners android:radius="9999dp" />
+            <stroke android:width="1dp" android:color="@color/card_border" />
+        </shape>
+    </item>
+</ripple>

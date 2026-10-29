@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        ── iOS 深色（参照 Surge / iOS 设置页）─────────────────────────
+        纯黑分组背景 + 深灰分组卡片 + 系统蓝，经典 iOS Settings 分组列表。
+    -->
+
+    <!-- 画布 / 背景 -->
+    <color name="bg">#FF000000</color>            <!-- 分组背景：纯黑 -->
+    <color name="parchment">#FF000000</color>
+    <color name="canvas">#FF000000</color>
+    <color name="card">#FF1C1C1E</color>          <!-- 分组卡片：深灰 -->
+    <color name="card_border">#FF2C2C2E</color>
+    <color name="divider">#FF38383A</color>       <!-- 行分隔线 -->
+    <color name="code_bg">#FF1C1C1E</color>
+    <color name="seg_track">#FF2C2C2E</color>
+    <color name="input_bg">#FF2C2C2E</color>    <!-- 输入框填充（比卡片亮一档） -->
+
+    <!-- 文字 -->
+    <color name="ink">#FFFFFFFF</color>           <!-- label -->
+    <color name="text">#FFFFFFFF</color>
+    <color name="text_dim">#FFAEAEB2</color>      <!-- secondaryLabel -->
+    <color name="text_muted">#FF8E8E93</color>    <!-- tertiaryLabel -->
+
+    <!-- 系统蓝 -->
+    <color name="accent">#FF0A84FF</color>
+    <color name="accent_ripple">#400A84FF</color>
+    <color name="on_accent">#FFFFFFFF</color>
+
+    <!-- 深色 tile（兼容） -->
+    <color name="tile">#FF1C1C1E</color>
+    <color name="tile_text">#FFFFFFFF</color>
+    <color name="tile_dim">#FF8E8E93</color>
+    <color name="tile_blue">#FF0A84FF</color>
+    <color name="tile_hairline">#FF38383A</color>
+
+    <color name="progress_track">#FF2C2C2E</color>
+
+    <!-- 状态 -->
+    <color name="state_idle">#FF8E8E93</color>    <!-- 灰 -->
+    <color name="state_work">#FF0A84FF</color>    <!-- 蓝 -->
+    <color name="state_ok">#FF30D158</color>      <!-- iOS 绿 -->
+    <color name="state_err">#FFFF453A</color>     <!-- iOS 红 -->
+</resources>

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 底部切换栏：白底 + 顶部 1px hairline（不用卡片底色，避免「卡片浮在卡片上」） -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/canvas" />
+        </shape>
+    </item>
+    <item
+        android:gravity="top"
+        android:height="1dp">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/card_border" />
+        </shape>
+    </item>
+</layer-list>

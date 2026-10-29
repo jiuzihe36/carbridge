@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">fakecar</string>
+    <string name="status">未连接</string>
+    <string name="btn_auto">自动找手机并连接</string>
+    <string name="btn_sdp">查 SDP</string>
+    <string name="btn_stop">停止</string>
+    <string name="phone_ip_hint">目标手机 IP（ctrl-int 邀请用，可选）</string>
+    <string name="log_title">日志</string>
+</resources>

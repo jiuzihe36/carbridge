@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.carbridge.fakecar"
+    android:versionCode="1"
+    android:versionName="0.1.0">
+
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35" />
+
+    <!-- AirPlay 接收端（TCP/UDP）+ ctrl-int 反连手机 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+
+    <!-- 蓝牙：API 31+ 用 CONNECT/SCAN，30 及以下用旧的 BLUETOOTH/BLUETOOTH_ADMIN -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+    <!-- 蓝牙扫描（fetchUuidsWithSdp / 设备发现）在旧版本需要定位权限 -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <!-- 锁屏保活：partial wake lock 让 CPU 不睡，蓝牙 RFCOMM 读循环不断（否则锁屏
+         后进程被 Doze 冻结 → 对端判定超时 → CarPlay 链路断开重走识别） -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 前台服务：锁屏后进程不退化成 cached（Android 12+ 会被 Cached App Freezer 冻结，
+         光 wake lock 不够），蓝牙/视频/音频线程才不会被冻结 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <uses-feature android:name="android.hardware.bluetooth" android:required="true" />
+
+    <application
+        android:allowBackup="false"
+        android:debuggable="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:theme="@style/AppTheme">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|keyboardHidden">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- 前台保活服务：锁屏后保持进程前台，避免 Cached App Freezer 冻结蓝牙/视频线程 -->
+        <service
+            android:name=".KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+    </application>
+</manifest>

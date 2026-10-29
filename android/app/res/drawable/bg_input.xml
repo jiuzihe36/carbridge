@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 数字输入框底：比卡片亮一档的填充 + 8dp 圆角，明确「这里能编辑」 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="@color/input_bg" />
+    <corners android:radius="8dp" />
+</shape>

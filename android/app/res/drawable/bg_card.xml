@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- iOS 分组卡片：深灰底 + 圆角 10dp，无边框（靠背景色差分层） -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="@color/card" />
+    <corners android:radius="10dp" />
+</shape>

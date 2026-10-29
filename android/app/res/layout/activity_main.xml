@@ -1,0 +1,816 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  carbridge — 参照 iOS Surge 的「分组列表」架构
+  · 纯黑分组背景 + 深灰圆角分组卡片（#1C1C1E，圆角 10dp）
+  · 每行 44dp：标题（左）+ 右侧值 / 箭头 › / 开关（右）
+  · 行分隔线 1dp 左边缩进；分组标题小字灰，分组间留空
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg"
+    android:orientation="vertical">
+
+    <!-- 顶部标题：logo + 名称 + 副标题 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="17dp"
+        android:paddingTop="14dp"
+        android:paddingEnd="17dp"
+        android:paddingBottom="10dp">
+
+        <ImageView
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:contentDescription="@string/app_name"
+            android:scaleType="fitXY"
+            android:src="@drawable/app_badge" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:letterSpacing="-0.02"
+                android:text="@string/app_name"
+                android:textColor="@color/ink"
+                android:textSize="22sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="@string/subtitle"
+                android:textColor="@color/text_dim"
+                android:textSize="12sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- 标题下的发丝线：内容滚动时才出现（iOS 导航栏行为） -->
+    <View
+        android:id="@+id/header_divider"
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/card_border"
+        android:visibility="invisible" />
+
+    <ScrollView
+        android:id="@+id/main_scroll"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingTop="6dp"
+            android:paddingBottom="24dp">
+
+            <!-- ══════════════ 第 1 页：连接（分组列表） ══════════════ -->
+            <LinearLayout
+                android:id="@+id/page_ops"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <!-- ── 分组：连接 ── -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="19dp"
+                    android:layout_marginBottom="6dp"
+                    android:text="@string/section_connection"
+                    android:textColor="@color/text_muted"
+                    android:textSize="13sp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="17dp"
+                    android:layout_marginEnd="17dp"
+                    android:background="@drawable/bg_card"
+                    android:orientation="vertical">
+
+                    <!-- 行：连接状态 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="52dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingStart="16dp"
+                        android:paddingEnd="16dp">
+
+                        <View
+                            android:id="@+id/dot"
+                            android:layout_width="10dp"
+                            android:layout_height="10dp"
+                            android:background="@drawable/dot_status" />
+
+                        <TextView
+                            android:id="@+id/state"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="10dp"
+                            android:layout_weight="1"
+                            android:ellipsize="end"
+                            android:maxLines="1"
+                            android:text="@string/state_idle"
+                            android:textColor="@color/ink"
+                            android:textSize="17sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/badge"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:background="@drawable/bg_badge"
+                            android:paddingStart="8dp"
+                            android:paddingTop="2dp"
+                            android:paddingEnd="8dp"
+                            android:paddingBottom="2dp"
+                            android:textColor="@color/on_accent"
+                            android:textSize="10sp"
+                            android:textStyle="bold"
+                            android:visibility="gone" />
+                    </LinearLayout>
+
+                    <View
+                        android:id="@+id/detail_divider"
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:layout_marginStart="16dp"
+                        android:background="@color/divider" />
+
+                    <!-- 行：副信息 -->
+                    <TextView
+                        android:id="@+id/detail"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:minHeight="44dp"
+                        android:paddingStart="16dp"
+                        android:paddingTop="10dp"
+                        android:paddingEnd="16dp"
+                        android:paddingBottom="10dp"
+                        android:lineSpacingExtra="2dp"
+                        android:textColor="@color/text_dim"
+                        android:textSize="14sp" />
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:layout_marginStart="16dp"
+                        android:background="@color/divider" />
+
+                    <!-- 行：连接 / 断开连接 -->
+                    <TextView
+                        android:id="@+id/btn_connect"
+                        android:layout_width="match_parent"
+                        android:layout_height="48dp"
+                        android:background="?android:attr/selectableItemBackground"
+                        android:gravity="center_vertical"
+                        android:paddingStart="16dp"
+                        android:paddingEnd="16dp"
+                        android:text="@string/btn_connect"
+                        android:textColor="@color/accent"
+                        android:textSize="16sp" />
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:layout_marginStart="16dp"
+                        android:background="@color/divider" />
+
+                    <!-- 行：配对车机 / 取消配对 -->
+                    <TextView
+                        android:id="@+id/btn_carplay"
+                        android:layout_width="match_parent"
+                        android:layout_height="48dp"
+                        android:background="?android:attr/selectableItemBackground"
+                        android:gravity="center_vertical"
+                        android:paddingStart="16dp"
+                        android:paddingEnd="16dp"
+                        android:text="@string/btn_carplay_start"
+                        android:textColor="@color/accent"
+                        android:textSize="16sp" />
+                </LinearLayout>
+
+                <!-- ── 分组：设置 ── -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="19dp"
+                    android:layout_marginTop="24dp"
+                    android:layout_marginBottom="6dp"
+                    android:text="@string/section_settings"
+                    android:textColor="@color/text_muted"
+                    android:textSize="13sp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="17dp"
+                    android:layout_marginEnd="17dp"
+                    android:background="@drawable/bg_card"
+                    android:orientation="vertical">
+
+                    <!-- 行：画质（可展开） -->
+                    <TextView
+                        android:id="@+id/quality_header"
+                        android:layout_width="match_parent"
+                        android:layout_height="44dp"
+                        android:background="?android:attr/selectableItemBackground"
+                        android:gravity="center_vertical"
+                        android:paddingStart="16dp"
+                        android:paddingEnd="16dp"
+                        android:text="@string/quality_title"
+                        android:textColor="@color/ink"
+                        android:textSize="16sp" />
+
+                    <LinearLayout
+                        android:id="@+id/quality_body"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:paddingStart="16dp"
+                        android:paddingEnd="16dp"
+                        android:paddingBottom="14dp"
+                        android:visibility="gone">
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <TextView
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="@string/quality_auto_fit"
+                                android:textColor="@color/ink"
+                                android:textSize="15sp" />
+
+                            <CheckBox
+                                android:id="@+id/switch_auto_fit"
+                                android:layout_width="51dp"
+                                android:layout_height="31dp"
+                                android:background="@drawable/switch_ios"
+                                android:button="@null"
+                                android:clickable="true"
+                                android:focusable="true"
+                                android:minHeight="0dp"
+                                android:minWidth="0dp"
+                                android:padding="0dp" />
+                        </LinearLayout>
+
+                        <TextView
+                            android:id="@+id/quality_target"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:lineSpacingExtra="2dp"
+                            android:text="@string/quality_target_unknown"
+                            android:textColor="@color/text_muted"
+                            android:textSize="12sp" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            android:text="@string/quality_resolution"
+                            android:textColor="@color/text_dim"
+                            android:textSize="13sp" />
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="44dp"
+                            android:layout_marginTop="7dp"
+                            android:baselineAligned="false"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <EditText
+                                android:id="@+id/edit_width"
+                                android:layout_width="0dp"
+                                android:layout_height="match_parent"
+                                android:layout_weight="1"
+                                android:background="@drawable/bg_input"
+                                android:hint="@string/quality_w_hint"
+                                android:inputType="number"
+                                android:maxLength="5"
+                                android:paddingStart="12dp"
+                                android:paddingEnd="12dp"
+                                android:selectAllOnFocus="true"
+                                android:textColor="@color/ink"
+                                android:textColorHint="@color/text_muted"
+                                android:textSize="15sp" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="8dp"
+                                android:layout_marginEnd="8dp"
+                                android:text="@string/quality_times"
+                                android:textColor="@color/text_muted"
+                                android:textSize="15sp" />
+
+                            <EditText
+                                android:id="@+id/edit_height"
+                                android:layout_width="0dp"
+                                android:layout_height="match_parent"
+                                android:layout_weight="1"
+                                android:background="@drawable/bg_input"
+                                android:hint="@string/quality_h_hint"
+                                android:inputType="number"
+                                android:maxLength="5"
+                                android:paddingStart="12dp"
+                                android:paddingEnd="12dp"
+                                android:selectAllOnFocus="true"
+                                android:textColor="@color/ink"
+                                android:textColorHint="@color/text_muted"
+                                android:textSize="15sp" />
+                        </LinearLayout>
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            android:text="@string/quality_fps"
+                            android:textColor="@color/text_dim"
+                            android:textSize="13sp" />
+
+                        <LinearLayout
+                            android:id="@+id/seg_fps"
+                            android:layout_width="match_parent"
+                            android:layout_height="34dp"
+                            android:layout_marginTop="7dp"
+                            android:background="@drawable/bg_seg_track"
+                            android:baselineAligned="false"
+                            android:orientation="horizontal"
+                            android:padding="2dp" />
+                    </LinearLayout>
+
+                </LinearLayout>
+
+                <!-- ── 分组：帮助 ── -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="19dp"
+                    android:layout_marginTop="24dp"
+                    android:layout_marginBottom="6dp"
+                    android:text="@string/section_help"
+                    android:textColor="@color/text_muted"
+                    android:textSize="13sp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="17dp"
+                    android:layout_marginEnd="17dp"
+                    android:background="@drawable/bg_card"
+                    android:orientation="vertical">
+
+                    <!-- 行：如何连接（折叠） -->
+                    <TextView
+                        android:id="@+id/guide_header"
+                        android:layout_width="match_parent"
+                        android:layout_height="44dp"
+                        android:background="?android:attr/selectableItemBackground"
+                        android:gravity="center_vertical"
+                        android:paddingStart="16dp"
+                        android:paddingEnd="16dp"
+                        android:text="@string/guide_title"
+                        android:textColor="@color/ink"
+                        android:textSize="16sp" />
+
+                    <LinearLayout
+                        android:id="@+id/guide_body"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:paddingStart="16dp"
+                        android:paddingEnd="16dp"
+                        android:paddingBottom="6dp"
+                        android:visibility="gone">
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:lineSpacingExtra="3dp"
+                            android:text="@string/guide_desc"
+                            android:textColor="@color/text_muted"
+                            android:textSize="12sp" />
+
+                        <TextView
+                            android:id="@+id/btn_selfcheck"
+                            android:layout_width="match_parent"
+                            android:layout_height="44dp"
+                            android:layout_marginTop="12dp"
+                            android:background="?android:attr/selectableItemBackground"
+                            android:gravity="center_vertical"
+                            android:text="@string/selfcheck_btn"
+                            android:textColor="@color/accent"
+                            android:textSize="15sp"
+                            android:textStyle="bold" />
+
+                        <View
+                            android:layout_width="match_parent"
+                            android:layout_height="1dp"
+                            android:background="@color/divider" />
+
+                        <TextView
+                            android:id="@+id/btn_autostart"
+                            android:layout_width="match_parent"
+                            android:layout_height="44dp"
+                            android:background="?android:attr/selectableItemBackground"
+                            android:drawableEnd="@drawable/ic_chevron_right"
+                            android:drawablePadding="6dp"
+                            android:drawableTint="@color/text_muted"
+                            android:gravity="center_vertical"
+                            android:text="@string/autostart_btn"
+                            android:textColor="@color/accent"
+                            android:textSize="15sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:layout_marginStart="16dp"
+                        android:background="@color/divider" />
+
+                    <!-- 行：运行日志（折叠） -->
+                    <TextView
+                        android:id="@+id/log_header"
+                        android:layout_width="match_parent"
+                        android:layout_height="44dp"
+                        android:background="?android:attr/selectableItemBackground"
+                        android:gravity="center_vertical"
+                        android:paddingStart="16dp"
+                        android:paddingEnd="16dp"
+                        android:text="@string/log_title"
+                        android:textColor="@color/ink"
+                        android:textSize="16sp" />
+
+                    <LinearLayout
+                        android:id="@+id/log_body"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:paddingStart="16dp"
+                        android:paddingEnd="16dp"
+                        android:paddingBottom="14dp"
+                        android:visibility="gone">
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <TextView
+                                android:id="@+id/btn_copy"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:background="?android:attr/selectableItemBackground"
+                                android:paddingStart="4dp"
+                                android:paddingTop="4dp"
+                                android:paddingEnd="4dp"
+                                android:paddingBottom="4dp"
+                                android:text="@string/btn_copy_log"
+                                android:textColor="@color/accent"
+                                android:textSize="14sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:id="@+id/btn_share"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="12dp"
+                                android:background="?android:attr/selectableItemBackground"
+                                android:paddingStart="4dp"
+                                android:paddingTop="4dp"
+                                android:paddingEnd="4dp"
+                                android:paddingBottom="4dp"
+                                android:text="@string/btn_share_log"
+                                android:textColor="@color/accent"
+                                android:textSize="14sp"
+                                android:textStyle="bold" />
+                        </LinearLayout>
+
+                        <ScrollView
+                            android:id="@+id/log_scroll"
+                            android:layout_width="match_parent"
+                            android:layout_height="280dp"
+                            android:layout_marginTop="12dp"
+                            android:background="@drawable/bg_code"
+                            android:padding="10dp">
+
+                            <TextView
+                                android:id="@+id/log"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:fontFamily="monospace"
+                                android:textColor="@color/text"
+                                android:textSize="11sp" />
+                        </ScrollView>
+                    </LinearLayout>
+                </LinearLayout>
+
+                <!-- ── 分组：关于 ── -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="19dp"
+                    android:layout_marginTop="24dp"
+                    android:layout_marginBottom="6dp"
+                    android:text="@string/about_title"
+                    android:textColor="@color/text_muted"
+                    android:textSize="13sp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="17dp"
+                    android:layout_marginEnd="17dp"
+                    android:background="@drawable/bg_card"
+                    android:orientation="vertical">
+
+                    <!-- 行：版本 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="44dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingStart="16dp"
+                        android:paddingEnd="16dp">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="@string/about_version_label"
+                            android:textColor="@color/ink"
+                            android:textSize="16sp" />
+
+                        <TextView
+                            android:id="@+id/about_version"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:textColor="@color/text_muted"
+                            android:textSize="15sp" />
+                    </LinearLayout>
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- ══════════════ 第 2 页：诊断 ══════════════ -->
+            <LinearLayout
+                android:id="@+id/page_progress"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <!-- ── 分组：诊断 ── -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="19dp"
+                    android:layout_marginBottom="6dp"
+                    android:text="@string/section_diagnosis"
+                    android:textColor="@color/text_muted"
+                    android:textSize="13sp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="17dp"
+                    android:layout_marginEnd="17dp"
+                    android:background="@drawable/bg_card"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="@string/section_steps"
+                            android:textColor="@color/ink"
+                            android:textSize="15sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/steps_progress_text"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/steps_progress_init"
+                            android:textColor="@color/accent"
+                            android:textSize="13sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <ProgressBar
+                        android:id="@+id/steps_progress"
+                        style="@android:style/Widget.Material.ProgressBar.Horizontal"
+                        android:layout_width="match_parent"
+                        android:layout_height="8dp"
+                        android:layout_marginTop="12dp"
+                        android:max="100"
+                        android:progress="0"
+                        android:progressDrawable="@drawable/bg_progress" />
+
+                    <LinearLayout
+                        android:id="@+id/steps_container"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:orientation="vertical" />
+                </LinearLayout>
+
+                <!-- ── 分组：实时指标 ── -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="19dp"
+                    android:layout_marginTop="24dp"
+                    android:layout_marginBottom="6dp"
+                    android:text="@string/section_metrics"
+                    android:textColor="@color/text_muted"
+                    android:textSize="13sp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="17dp"
+                    android:layout_marginEnd="17dp"
+                    android:background="@drawable/bg_card"
+                    android:orientation="vertical">
+
+                    <!-- 行：帧率 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="44dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingStart="16dp"
+                        android:paddingEnd="16dp">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="@string/metric_fps_label"
+                            android:textColor="@color/ink"
+                            android:textSize="16sp" />
+
+                        <TextView
+                            android:id="@+id/metric_fps"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/metric_placeholder"
+                            android:textColor="@color/text_muted"
+                            android:textSize="15sp" />
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:layout_marginStart="16dp"
+                        android:background="@color/divider" />
+
+                    <!-- 行：分辨率 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="44dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingStart="16dp"
+                        android:paddingEnd="16dp">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="@string/metric_resolution_label"
+                            android:textColor="@color/ink"
+                            android:textSize="16sp" />
+
+                        <TextView
+                            android:id="@+id/metric_resolution"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/metric_placeholder"
+                            android:textColor="@color/text_muted"
+                            android:textSize="15sp" />
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:layout_marginStart="16dp"
+                        android:background="@color/divider" />
+
+                    <!-- 行：码率 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="44dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingStart="16dp"
+                        android:paddingEnd="16dp">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="@string/metric_bitrate_label"
+                            android:textColor="@color/ink"
+                            android:textSize="16sp" />
+
+                        <TextView
+                            android:id="@+id/metric_bitrate"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/metric_placeholder"
+                            android:textColor="@color/text_muted"
+                            android:textSize="15sp" />
+                    </LinearLayout>
+                </LinearLayout>
+            </LinearLayout>
+
+        </LinearLayout>
+    </ScrollView>
+
+    <!-- 底部页签：连接 / 诊断（顶部发丝分隔线，iOS tab bar 质感） -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/card_border" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/bg"
+        android:orientation="horizontal"
+        android:paddingTop="6dp"
+        android:paddingBottom="12dp"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp">
+
+        <TextView
+            android:id="@+id/tab_ops"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:background="?android:attr/selectableItemBackground"
+            android:drawablePadding="3dp"
+            android:drawableTop="@drawable/ic_tab_ops"
+            android:gravity="center"
+            android:paddingStart="4dp"
+            android:paddingTop="6dp"
+            android:paddingEnd="4dp"
+            android:paddingBottom="2dp"
+            android:text="@string/tab_ops"
+            android:textColor="@color/accent"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tab_progress"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:background="?android:attr/selectableItemBackground"
+            android:drawablePadding="3dp"
+            android:drawableTop="@drawable/ic_tab_progress"
+            android:gravity="center"
+            android:paddingStart="4dp"
+            android:paddingTop="6dp"
+            android:paddingEnd="4dp"
+            android:paddingBottom="2dp"
+            android:text="@string/tab_progress"
+            android:textColor="@color/text_muted"
+            android:textSize="11sp"
+            android:textStyle="normal" />
+    </LinearLayout>
+</LinearLayout>

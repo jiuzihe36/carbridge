@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- iOS 开关：开（绿轨 + 白钮靠右），51×31dp，无动画 -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:width="51dp"
+        android:height="31dp"
+        android:gravity="center_vertical">
+        <shape android:shape="rectangle">
+            <corners android:radius="16dp" />
+            <solid android:color="#FF30D158" />
+        </shape>
+    </item>
+    <item
+        android:width="27dp"
+        android:height="27dp"
+        android:gravity="end|center_vertical"
+        android:right="2dp">
+        <shape android:shape="oval">
+            <solid android:color="#FFFFFFFF" />
+        </shape>
+    </item>
+</layer-list>

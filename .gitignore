@@ -1,0 +1,24 @@
+# 构建产物
+build/
+*.apk
+*.idsig
+*.keystore
+*.jks
+
+# 本地配置 / IDE
+.idea/
+*.iml
+local.properties
+
+# 系统文件
+.DS_Store
+
+# 本地调研资料，不随仓库发布
+research/
+docs/*.md
+!docs/ARCHITECTURE.md
+tools/*
+!tools/fakecar/
+
+# 本地虚拟环境
+.fakecar-venv/

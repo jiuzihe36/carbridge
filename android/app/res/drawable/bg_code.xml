@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 日志/代码块：羊皮纸底 + hairline，等宽字放这里 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="@color/code_bg" />
+    <corners android:radius="11dp" />
+    <stroke android:width="1dp" android:color="@color/card_border" />
+</shape>

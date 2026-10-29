@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 进度 = 步骤清单：三个圆点 + 三行（右行递减，暗示"走到哪了"） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M4.5,6.5 L4.51,6.5 M9,6.5 L19.5,6.5"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeWidth="2.2" />
+    <path
+        android:pathData="M4.5,12 L4.51,12 M9,12 L17,12"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeWidth="2.2" />
+    <path
+        android:pathData="M4.5,17.5 L4.51,17.5 M9,17.5 L14,17.5"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeWidth="2.2" />
+</vector>

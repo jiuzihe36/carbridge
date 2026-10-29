@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.carbridge.app"
+    android:versionCode="1"
+    android:versionName="0.1.0">
+
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <!-- getSSID() 在 Android 10+ 需要定位权限，否则返回 <unknown ssid> -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <!-- 蓝牙：API 31+ 用 CONNECT/SCAN（运行时权限），30 及以下用旧的 BLUETOOTH/BLUETOOTH_ADMIN -->
+    <uses-permission android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+    <!-- API 33+ 加入车机热点需要 -->
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation" />
+
+    <!-- ── 后台保活（VPN 式）：锁屏只锁屏幕，不打断连接 ── -->
+    <!-- partial wake lock：锁屏后 CPU 不睡，心跳线程才能继续跑 -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 前台服务：进程不退化成 cached，避免被 Cached App Freezer 冻结 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- 前台服务通知（API 33+ 需运行时授权） -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 电池优化白名单：申请后系统不再对其省电/冻结（即「不进入省电模式」） -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- 开机拉起 SDP 信标服务：车机是在蓝牙连上那一刻查 SDP 的，必须提前挂好 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- 看门狗闹钟：系统会杀后台进程（实测 ColorOS 会），闹钟是唯一能自己爬回来的办法 -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- WiFi 保活：锁屏后 WiFi 芯片进省电会丢包 -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <!-- MulticastLock 必需（缺它 createMulticastLock 会抛 SecurityException 直接闪退） -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
+    <!-- 无线 CarPlay 必需（我们不是车，但仍需蓝牙能力声明） -->
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
+    <uses-feature android:name="android.hardware.wifi" android:required="false" />
+
+    <queries>
+        <package android:name="com.oplus.ocar" />
+        <package android:name="com.baidu.carlife.oppo" />
+    </queries>
+
+    <application
+        android:allowBackup="false"
+        android:debuggable="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:theme="@style/AppTheme">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- 一键分享日志用：只读、仅暴露会话日志文件 -->
+        <provider
+            android:name=".LogProvider"
+            android:authorities="com.carbridge.app.logs"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+
+        <!-- VPN 式保活服务：常驻前台通知 + 持 partial wake lock + WifiLock，
+             让锁屏/后台只影响屏幕显示，不打断 6 条通道与心跳。 -->
+        <service
+            android:name=".KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+
+        <!-- CarPlay SDP 信标：开机常驻（不拿唤醒锁），让车机任何时候都能识别本机 -->
+        <service
+            android:name=".SdpBeaconService"
+            android:exported="false"
+            android:stopWithTask="false"
+            android:foregroundServiceType="connectedDevice" />
+
+        <!-- 看门狗第二道：JobScheduler 定时把信标服务拉回来（闹钟被 o-kill 清掉时兜底） -->
+        <service
+            android:name=".BeaconJobService"
+            android:exported="true"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+
+        <!-- 看门狗：进程被系统杀掉后，靠闹钟把它叫回来重新注册 SDP 记录 -->
+        <receiver
+            android:name=".BeaconWatchdogReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>
