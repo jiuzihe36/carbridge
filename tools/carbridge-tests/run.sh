@@ -14,9 +14,11 @@ JAVA="${JAVA_HOME:+$JAVA_HOME/bin/java}"
 rm -rf "$OUT"; mkdir -p "$OUT"
 {
   find "$SRC/com/carbridge/carplay/iap2" -name '*.java'
+  find "$SRC/com/carbridge/carplay/pairing" -name '*.java'
   echo "$SRC/com/carbridge/carplay/core/DisplayGeometry.java"
   echo "$SRC/com/carbridge/carplay/core/AdaptiveResolution.java"
   echo "$SRC/com/carbridge/carplay/core/AirPlaySetup.java"
+  echo "$SRC/com/carbridge/carplay/core/AirPlayStreamCrypto.java"
   echo "$SRC/com/carbridge/app/QualityPrefs.java"
   echo "$SRC/com/carbridge/app/StepChain.java"
   echo "$SRC/com/carbridge/app/StatusView.java"

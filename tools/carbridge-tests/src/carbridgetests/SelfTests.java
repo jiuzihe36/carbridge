@@ -39,6 +39,7 @@ public final class SelfTests {
         navVoice();
         ducking();
         wifiConfig();
+        cryptoVectors();
 
         System.out.println();
         System.out.println("通过 " + passed + " / 失败 " + failed);
@@ -546,6 +547,60 @@ public final class SelfTests {
         check(com.carbridge.carplay.iap2.WifiConfigParser.isValidChannel(165), "165 信道合法");
         check(!com.carbridge.carplay.iap2.WifiConfigParser.isValidChannel(15), "15 信道非法");
         check(!com.carbridge.carplay.iap2.WifiConfigParser.isValidChannel(0), "0 信道非法");
+    }
+
+    // ---------------------------------------------------------------- 密码学向量
+
+    /**
+     * RFC 8032（Ed25519）与 RFC 7748（X25519）官方测试向量。
+     *
+     * <p>为什么必须做：配对链路里的 Ed25519 验签和 X25519 共享密钥**从来没被真实车机
+     * 验证过**（假车机不给长期公钥，M2 验签一直被跳过）。要是实现有错，真车上会表现为
+     * 「配对一闪而过、车机不再发邀请」，而且日志看不出原因。用公开向量钉死实现。
+     */
+    private static void cryptoVectors() {
+        section("Ed25519 / X25519（RFC 测试向量）");
+
+        // RFC 8032 §7.1 TEST 1
+        byte[] sk1 = hex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60");
+        byte[] pk1 = hex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a");
+        byte[] msg1 = new byte[0];
+        byte[] sig1 = hex("e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b");
+        check(com.carbridge.carplay.pairing.Ed25519.verify(sig1, pk1, msg1), "RFC8032 TEST1：空消息验签通过");
+        byte[] got = com.carbridge.carplay.pairing.Ed25519.sign(sk1, msg1);
+        check(java.util.Arrays.equals(got, sig1), "RFC8032 TEST1：签名与向量一致");
+
+        // RFC 8032 §7.1 TEST 2（一字节消息 0x72）
+        byte[] sk2 = hex("4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb");
+        byte[] pk2 = hex("3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c");
+        byte[] msg2 = hex("72");
+        byte[] sig2 = hex("92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00");
+        check(com.carbridge.carplay.pairing.Ed25519.verify(sig2, pk2, msg2), "RFC8032 TEST2：单字节消息验签通过");
+
+        // 篡改必须失败
+        byte[] bad = sig1.clone();
+        bad[0] ^= 0x01;
+        check(!com.carbridge.carplay.pairing.Ed25519.verify(bad, pk1, msg1), "篡改签名必须验签失败");
+
+        // RFC 7748 §6.1：X25519 两个密钥交换必须得到同一共享密钥
+        byte[] aliceSk = hex("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a");
+        byte[] bobSk   = hex("5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb");
+        byte[] alicePk = com.carbridge.carplay.pairing.X25519.publicKey(aliceSk);
+        byte[] bobPk   = com.carbridge.carplay.pairing.X25519.publicKey(bobSk);
+        byte[] s1 = com.carbridge.carplay.pairing.X25519.sharedSecret(aliceSk, bobPk);
+        byte[] s2 = com.carbridge.carplay.pairing.X25519.sharedSecret(bobSk, alicePk);
+        check(java.util.Arrays.equals(s1, s2), "X25519：双方共享密钥一致");
+        byte[] expect = hex("4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742");
+        check(java.util.Arrays.equals(s1, expect), "X25519：共享密钥与 RFC7748 向量一致");
+    }
+
+    private static byte[] hex(String s) {
+        int n = s.length() / 2;
+        byte[] out = new byte[n];
+        for (int i = 0; i < n; i++) {
+            out[i] = (byte) Integer.parseInt(s.substring(i * 2, i * 2 + 2), 16);
+        }
+        return out;
     }
 
     // ---------------------------------------------------------------- 工具
