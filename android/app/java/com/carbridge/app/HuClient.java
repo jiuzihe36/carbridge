@@ -133,6 +133,8 @@ public final class HuClient {
     private final Socket[] socks = new Socket[HU_SLOTS];
     private volatile int[] activePorts = HuProto.WIFI_PORTS;
     private volatile boolean videoReading;
+    /** 收到的空帧（len=0）计数：CarLife 用它们当心跳，不能当故障。 */
+    private volatile long emptyFrames;
     /** 音频读取线程在跑（9240 通道）。**不读会把手机侧的媒体发送堵死**。 */
     private volatile boolean audioReading;
     /** TTS 排空线程在跑（9241 通道，只读不转发）。 */
@@ -1526,8 +1528,18 @@ public final class HuClient {
                 int len = HuProto.mediaLength(head);
                 int ts = HuProto.mediaTimestamp(head);
                 int service = HuProto.mediaService(head);
-                if (len <= 0 || len > 8 * 1024 * 1024) {
-                    log("视频帧长度异常 " + len + "，重启会话");
+                if (len == 0) {
+                    // ⚠️ len==0 是 CarLife 的**空帧/心跳**，不是故障。
+                    // 以前把它当致命错误 → closeAll() → 车机侧整个会话被我们拆掉，
+                    // 重连后又遇到空帧 → 再断……现场表现就是「Car+ 总是自己断联」。
+                    emptyFrames++;
+                    if (emptyFrames == 1 || emptyFrames % 200 == 0) {
+                        log("视频空帧（len=0）已跳过 " + emptyFrames + " 个（心跳/占位，不断会话）");
+                    }
+                    continue;
+                }
+                if (len < 0 || len > 8 * 1024 * 1024) {
+                    log("视频帧长度非法 " + len + "，重启会话");
                     closeAll();
                     return;
                 }
