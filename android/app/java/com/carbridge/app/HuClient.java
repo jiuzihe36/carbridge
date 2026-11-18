@@ -828,12 +828,56 @@ public final class HuClient {
         launchCarlifeChannel(true);
     }
 
+    /**
+     * 直接起 CarLife 的**服务**（不走 Activity）。
+     *
+     * <p>为什么必须这一步：锁屏时系统会拦掉「后台启动 Activity」，于是
+     * {@link #launchCarlifeChannel} 的 am start 全部无效，Car+ 的 6 个端口永远不开 ——
+     * 现场就是「锁屏后连不上 / 假车机不能触摸」。而**启动服务不受这个限制**。
+     *
+     * <p>动作名与服务名从 Car+ 的 AndroidManifest 里取：
+     * {@code com.oplus.ocar.action.START_CARLIFE_SERVICE} →
+     * {@code com.oplus.ocar/.connect.carlife.CarlifeCastManagerService}。
+     */
+    private boolean startCarlifeService() {
+        try {
+            Intent i = new Intent("com.oplus.ocar.action.START_CARLIFE_SERVICE");
+            i.setComponent(new ComponentName("com.oplus.ocar",
+                    "com.oplus.ocar.connect.carlife.CarlifeCastManagerService"));
+            ctx.startService(i);
+            log("已启动 CarLife 服务（锁屏下同样有效）");
+            return true;
+        } catch (Throwable t) {
+            log("启动 CarLife 服务失败：" + t);
+            return false;
+        }
+    }
+
+    /** 当前是否处于锁屏（诊断用：锁屏时只有服务启动这条路走得通）。 */
+    private boolean isKeyguardLocked() {
+        try {
+            android.app.KeyguardManager km = (android.app.KeyguardManager)
+                    ctx.getSystemService(Context.KEYGUARD_SERVICE);
+            return km != null && km.isKeyguardLocked();
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     /** 拉起 Car+ 的车机通道入口（exported，无需 root）。 */
     private void launchCarlifeChannel() {
         launchCarlifeChannel(false);
     }
 
     private void launchCarlifeChannel(boolean clearTask) {
+        // 先起服务：这条路锁屏也能用，而且幂等（已经在跑就什么都不做）。
+        // 后面那句 am start 只在解锁状态才有效，锁屏时会被系统静默拒绝。
+        startCarlifeService();
+        if (isKeyguardLocked()) {
+            log("当前是锁屏状态：只用服务启动，跳过 Activity 拉起（后台启动 Activity 会被系统拒绝）");
+            lastLaunchAtMs = System.currentTimeMillis();
+            return;
+        }
         // 冷却：反复 am start 会重置正在初始化的 Car+ 服务，等于自己把它掐死
         long now = System.currentTimeMillis();
         if (!clearTask && lastLaunchAtMs > 0 && now - lastLaunchAtMs < LAUNCH_COOLDOWN_MS) {
