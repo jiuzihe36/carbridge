@@ -133,6 +133,13 @@ public final class HuClient {
     private final Socket[] socks = new Socket[HU_SLOTS];
     private volatile int[] activePorts = HuProto.WIFI_PORTS;
     private volatile boolean videoReading;
+    /** 音乐音频最后一次到达的时刻：用于判断「音乐是不是正闲着」。 */
+    private volatile long lastMediaAudioAtMs;
+    /** 已成功转发到车机的导航语音包数。 */
+    private volatile long ttsForwarded;
+    /** 音乐在播时被丢弃的导航语音包数（诊断用）。 */
+    private volatile long ttsDropped;
+
     /** 收到的空帧（len=0）计数：CarLife 用它们当心跳，不能当故障。 */
     private volatile long emptyFrames;
     /** 音频读取线程在跑（9240 通道）。**不读会把手机侧的媒体发送堵死**。 */
@@ -1707,6 +1714,7 @@ public final class HuClient {
                 }
                 dataPkts++;
                 bytes += len;
+                lastMediaAudioAtMs = System.currentTimeMillis();
                 if (dataPkts == 1) {
                     log("★ 音频数据首包 len=" + len + " ts=" + ts
                             + " 头 " + HuProto.hex(payload, 16));
@@ -1767,9 +1775,10 @@ public final class HuClient {
                         if (len < 0 || len > 1024 * 1024) {
                             return;
                         }
+                        byte[] payload = len == 0 ? new byte[0] : new byte[len];
                         int got = 0;
                         while (got < len) {
-                            int n = in.read(buf, 0, Math.min(buf.length, len - got));
+                            int n = in.read(payload, got, len - got);
                             if (n < 0) {
                                 return;
                             }
@@ -1777,6 +1786,35 @@ public final class HuClient {
                         }
                         drained += len;
                         pkts++;
+
+                        // 导航语音（16k 单声道）→ 44.1k 立体声，在**音乐空闲**时直接送出去。
+                        //
+                        // 为什么只在空闲时送：真正 iPhone 的做法是车机侧 duck（压低音乐），
+                        // 但接收端对 duckAudio/第二条流的支持不可靠（mcarplay 2026-10 实测）。
+                        // 手机侧混音要处理增益包络与限幅，没有听感验证前不敢动音乐那一路，
+                        // 所以先做**无风险的一半**：音乐静音时导航能响。
+                        CarPlayBridge br = carPlayBridge;
+                        boolean mediaIdle = System.currentTimeMillis() - lastMediaAudioAtMs > 300;
+                        if (br != null && mediaIdle) {
+                            byte[] stereo = com.carbridge.carplay.audio.NavVoicePcm
+                                    .mono16kToStereo44k(payload);
+                            if (stereo != null) {
+                                br.submitAudio(stereo, stereo.length, HuProto.mediaTimestamp(head));
+                                if (ttsForwarded == 0) {
+                                    int ms = com.carbridge.carplay.audio.NavVoicePcm
+                                            .durationMs(len, 16000, 1, 2);
+                                    log("★ 导航语音首包已转发（音乐空闲）" + len + "B ≈" + ms
+                                            + "ms@16k单声道 → " + stereo.length + "B@44.1k立体声"
+                                            + (ms > 3000 ? "  ⚠ 时长异常，格式可能不是 16k 单声道" : ""));
+                                }
+                                ttsForwarded++;
+                            }
+                        } else if (br != null) {
+                            ttsDropped++;
+                            if (ttsDropped == 1 || ttsDropped % 100 == 0) {
+                                log("导航语音跳过 " + ttsDropped + " 包（音乐正在播，避免盖住音乐）");
+                            }
+                        }
                         if (pkts == 1) {
                             log("← TTS 通道有数据（已排空，暂不转发）len=" + len);
                         }

@@ -36,6 +36,7 @@ public final class SelfTests {
         statusView();
         metricsText();
         macText();
+        navVoice();
 
         System.out.println();
         System.out.println("通过 " + passed + " / 失败 " + failed);
@@ -424,6 +425,33 @@ public final class SelfTests {
         check("A4:50:46:1C:2D:EE".equals(com.carbridge.carplay.util.MacText.fromBytes(
                 new byte[]{(byte)0xA4,0x50,0x46,0x1C,0x2D,(byte)0xEE})), "字节数组规范化");
         check(com.carbridge.carplay.util.MacText.fromBytes(new byte[]{0,0,0,0,0,0}) == null, "全 0 字节数组被拒");
+    }
+
+    // ---------------------------------------------------------------- 导航语音
+
+    private static void navVoice() {
+        section("NavVoicePcm（16k 单声道 → 44.1k 立体声）");
+        // 1 秒 16k 单声道（32000 字节）→ 44.1k 立体声 = 44100 帧 × 4B = 176400 字节
+        byte[] oneSecond = new byte[32000];
+        for (int i = 0; i < 16000; i++) {
+            short v = (short) (i % 1000 - 500);
+            oneSecond[i * 2] = (byte) (v & 0xFF);
+            oneSecond[i * 2 + 1] = (byte) ((v >> 8) & 0xFF);
+        }
+        byte[] out = com.carbridge.carplay.audio.NavVoicePcm.mono16kToStereo44k(oneSecond);
+        check(out != null && out.length == 44100 * 4, "1 秒 16k 单声道 → 44100 帧立体声（实际 "
+                + (out == null ? "null" : out.length / 4) + " 帧）");
+        // 左右声道必须一致（单声道复制）
+        boolean same = true;
+        for (int i = 0; i < Math.min(400, out.length / 4); i++) {
+            if (out[i * 4] != out[i * 4 + 2] || out[i * 4 + 1] != out[i * 4 + 3]) { same = false; break; }
+        }
+        check(same, "左右声道一致");
+        check(com.carbridge.carplay.audio.NavVoicePcm.mono16kToStereo44k(null) == null, "null 输入返回 null");
+        check(com.carbridge.carplay.audio.NavVoicePcm.mono16kToStereo44k(new byte[]{1}) == null, "不足一帧返回 null");
+
+        check(com.carbridge.carplay.audio.NavVoicePcm.durationMs(32000, 16000, 1, 2) == 1000, "1 秒时长计算");
+        check(com.carbridge.carplay.audio.NavVoicePcm.durationMs(0, 16000, 1, 2) == 0, "0 字节时长为 0");
     }
 
     // ---------------------------------------------------------------- 工具
