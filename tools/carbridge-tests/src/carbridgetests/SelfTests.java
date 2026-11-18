@@ -37,6 +37,7 @@ public final class SelfTests {
         metricsText();
         macText();
         navVoice();
+        ducking();
 
         System.out.println();
         System.out.println("通过 " + passed + " / 失败 " + failed);
@@ -452,6 +453,49 @@ public final class SelfTests {
 
         check(com.carbridge.carplay.audio.NavVoicePcm.durationMs(32000, 16000, 1, 2) == 1000, "1 秒时长计算");
         check(com.carbridge.carplay.audio.NavVoicePcm.durationMs(0, 16000, 1, 2) == 0, "0 字节时长为 0");
+    }
+
+    // ---------------------------------------------------------------- 混音
+
+    private static void ducking() {
+        section("AudioDuckingMixer（音乐+导航混音）");
+        com.carbridge.carplay.audio.AudioDuckingMixer m = new com.carbridge.carplay.audio.AudioDuckingMixer();
+
+        // 没有提示音时：音乐原样通过（增益 1.0）
+        byte[] music = new byte[4410 * 4];
+        for (int i = 0; i < 4410; i++) {
+            short v = (short) 1000;
+            music[i * 4] = (byte) (v & 0xFF); music[i * 4 + 1] = (byte) ((v >> 8) & 0xFF);
+            music[i * 4 + 2] = (byte) (v & 0xFF); music[i * 4 + 3] = (byte) ((v >> 8) & 0xFF);
+        }
+        byte[] out = m.mixMusic(music, music.length);
+        check(out != null && out.length == music.length, "输出与输入等长（时间轴不漂）");
+        check(m.currentGain() > 0.99f, "无提示时音乐不被压低");
+
+        // 送一段提示音，再混：音乐应被压低、输出仍等长
+        byte[] prompt = new byte[4410 * 4];
+        for (int i = 0; i < prompt.length; i++) prompt[i] = (byte) 0x20;
+        m.submitPrompt(prompt);
+        check(m.hasPrompt(), "提示音已入队");
+        int before = m.pendingFrames();
+        byte[] mixed = m.mixMusic(music, music.length);
+        check(mixed.length == music.length, "混音后长度不变");
+        check(m.pendingFrames() < before, "提示音被消费（" + before + " → " + m.pendingFrames() + "）");
+        check(m.currentGain() < 0.99f, "音乐开始被压低（gain=" + m.currentGain() + "）");
+
+        // 极限情况：提示音很大 + 音乐很大 → 必须限幅而不是回绕
+        byte[] loud = new byte[4410 * 4];
+        java.util.Arrays.fill(loud, (byte) 0x7F);
+        m.submitPrompt(loud);
+        m.mixMusic(loud, loud.length);
+        check(m.clippedSamples() > 0, "超范围时计限幅次数（" + m.clippedSamples() + "）");
+
+        // 独立取出提示音（音乐静止时）
+        com.carbridge.carplay.audio.AudioDuckingMixer m2 = new com.carbridge.carplay.audio.AudioDuckingMixer();
+        m2.submitPrompt(loud);
+        byte[] drained = m2.drainPrompt();
+        check(drained != null && drained.length == loud.length, "音乐静止时可单独取出提示音");
+        check(m2.drainPrompt() == null, "取出后清空");
     }
 
     // ---------------------------------------------------------------- 工具

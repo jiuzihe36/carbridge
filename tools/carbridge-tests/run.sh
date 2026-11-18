@@ -23,6 +23,7 @@ rm -rf "$OUT"; mkdir -p "$OUT"
   echo "$SRC/com/carbridge/app/MetricsText.java"
   echo "$SRC/com/carbridge/carplay/util/MacText.java"
   echo "$SRC/com/carbridge/carplay/audio/NavVoicePcm.java"
+  echo "$SRC/com/carbridge/carplay/audio/AudioDuckingMixer.java"
   find "$HERE/src" -name '*.java'
 } > "$OUT/sources.txt"
 

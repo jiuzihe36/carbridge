@@ -133,6 +133,10 @@ public final class HuClient {
     private final Socket[] socks = new Socket[HU_SLOTS];
     private volatile int[] activePorts = HuProto.WIFI_PORTS;
     private volatile boolean videoReading;
+    /** 音乐+导航的手机侧混音器（带 ducking 增益包络）。 */
+    private final com.carbridge.carplay.audio.AudioDuckingMixer duckMixer =
+            new com.carbridge.carplay.audio.AudioDuckingMixer();
+
     /** 音乐音频最后一次到达的时刻：用于判断「音乐是不是正闲着」。 */
     private volatile long lastMediaAudioAtMs;
     /** 已成功转发到车机的导航语音包数。 */
@@ -1728,7 +1732,14 @@ public final class HuClient {
                         // （真 iPhone 就是单独开一条 audioType=telephony 的流，单声道）。
                         bridge.submitTelephonyAudio(payload, len, ts);
                     } else {
-                        bridge.submitAudio(payload, len, ts);
+                        // 音乐与导航在手机侧混好再送：接收端对 duckAudio / 第二条流不可靠，
+                        // 而混音发生在编码之前，对任何档位都成立。
+                        byte[] mixed = duckMixer.mixMusic(payload, len);
+                        bridge.submitAudio(mixed, len, ts);
+                        if (dataPkts % 200 == 0 && duckMixer.currentGain() < 0.99f) {
+                            log("音乐已压低（gain=" + String.format(java.util.Locale.US, "%.2f",
+                                    duckMixer.currentGain()) + "），导航语音混在中");
+                        }
                     }
                 }
             }
@@ -1794,25 +1805,27 @@ public final class HuClient {
                         // 手机侧混音要处理增益包络与限幅，没有听感验证前不敢动音乐那一路，
                         // 所以先做**无风险的一半**：音乐静音时导航能响。
                         CarPlayBridge br = carPlayBridge;
-                        boolean mediaIdle = System.currentTimeMillis() - lastMediaAudioAtMs > 300;
-                        if (br != null && mediaIdle) {
+                        if (br != null) {
                             byte[] stereo = com.carbridge.carplay.audio.NavVoicePcm
                                     .mono16kToStereo44k(payload);
                             if (stereo != null) {
-                                br.submitAudio(stereo, stereo.length, HuProto.mediaTimestamp(head));
                                 if (ttsForwarded == 0) {
                                     int ms = com.carbridge.carplay.audio.NavVoicePcm
                                             .durationMs(len, 16000, 1, 2);
-                                    log("★ 导航语音首包已转发（音乐空闲）" + len + "B ≈" + ms
+                                    log("★ 导航语音开始混入" + len + "B ≈" + ms
                                             + "ms@16k单声道 → " + stereo.length + "B@44.1k立体声"
                                             + (ms > 3000 ? "  ⚠ 时长异常，格式可能不是 16k 单声道" : ""));
                                 }
+                                // 先入混音器：音乐在播时由它压低音乐并叠加
+                                duckMixer.submitPrompt(stereo);
                                 ttsForwarded++;
-                            }
-                        } else if (br != null) {
-                            ttsDropped++;
-                            if (ttsDropped == 1 || ttsDropped % 100 == 0) {
-                                log("导航语音跳过 " + ttsDropped + " 包（音乐正在播，避免盖住音乐）");
+                                // 音乐闲着就直接把提示音发出去（否则要等下一段音乐才播）
+                                if (System.currentTimeMillis() - lastMediaAudioAtMs > 300) {
+                                    byte[] p = duckMixer.drainPrompt();
+                                    if (p != null) {
+                                        br.submitAudio(p, p.length, HuProto.mediaTimestamp(head));
+                                    }
+                                }
                             }
                         }
                         if (pkts == 1) {
