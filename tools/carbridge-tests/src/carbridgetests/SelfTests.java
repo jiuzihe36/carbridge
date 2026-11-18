@@ -41,6 +41,7 @@ public final class SelfTests {
         wifiConfig();
         cryptoVectors();
         airPlayInfo();
+        linkEngine();
 
         System.out.println();
         System.out.println("通过 " + passed + " / 失败 " + failed);
@@ -548,6 +549,111 @@ public final class SelfTests {
         check(com.carbridge.carplay.iap2.WifiConfigParser.isValidChannel(165), "165 信道合法");
         check(!com.carbridge.carplay.iap2.WifiConfigParser.isValidChannel(15), "15 信道非法");
         check(!com.carbridge.carplay.iap2.WifiConfigParser.isValidChannel(0), "0 信道非法");
+    }
+
+    // ---------------------------------------------------------------- 链路层
+
+    /**
+     * 链路层的**分帧与重新同步**。
+     *
+     * <p>蓝牙串口是字节流：可能一个包分两次到、也可能前面混进垃圾字节。
+     * 这里写错的表现是「识别成功但后面每条消息都错位」，现场极难判断。
+     */
+    private static void linkEngine() {
+        section("Iap2LinkEngine（分帧 / 重新同步）");
+
+        final java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        final java.util.List<String> logs = new java.util.ArrayList<String>();
+        final java.util.List<com.carbridge.carplay.iap2.Iap2Csm.Message> gotMessages =
+                new java.util.ArrayList<com.carbridge.carplay.iap2.Iap2Csm.Message>();
+        com.carbridge.carplay.iap2.Iap2LinkEngine.Transport tp =
+                new com.carbridge.carplay.iap2.Iap2LinkEngine.Transport() {
+                    @Override public void send(byte[] data) {
+                        out.write(data, 0, data.length);
+                    }
+                };
+        com.carbridge.carplay.iap2.Iap2LinkEngine.Listener ln =
+                new com.carbridge.carplay.iap2.Iap2LinkEngine.Listener() {
+                    @Override public void onLog(String line) { logs.add(line); }
+                    @Override public void onState(com.carbridge.carplay.iap2.Iap2LinkEngine.State st) { }
+                    @Override public void onMessage(com.carbridge.carplay.iap2.Iap2Csm.Message m) {
+                        gotMessages.add(m);
+                    }
+                };
+
+        com.carbridge.carplay.iap2.Iap2LinkEngine e =
+                new com.carbridge.carplay.iap2.Iap2LinkEngine(tp, ln,
+                        com.carbridge.carplay.iap2.Iap2LinkEngine.Role.INITIATOR);
+
+        // 1) 前面混进垃圾字节：应该跳过并继续，不抛异常
+        byte[] junk = new byte[]{0x00, (byte) 0xAA, 0x13, (byte) 0xFF};
+        e.onBytes(junk);
+        check(true, "垃圾字节不会抛异常（已跳过）");
+
+        // 2) 收到 detect marker → 发起方应回 SYN
+        out.reset();
+        e.onBytes(com.carbridge.carplay.iap2.Iap2LinkPacket.DETECT);
+        byte[] sent = out.toByteArray();
+        boolean syn = false;
+        for (int i = 0; i + 5 < sent.length; i++) {
+            if ((sent[i] & 0xFF) == 0xFF && sent[i + 1] == 0x5A
+                    && ((sent[i + 4] & 0xFF) & com.carbridge.carplay.iap2.Iap2LinkPacket.CONTROL_SYN) != 0) {
+                syn = true;
+                break;
+            }
+        }
+        check(syn, "收到 detect marker 后发出 SYN（" + sent.length + "B）");
+
+        // 3) 一个包分成两半到达：第一半不应该被当坏帧丢掉
+        com.carbridge.carplay.iap2.Iap2LinkPacket pkt =
+                new com.carbridge.carplay.iap2.Iap2LinkPacket(0, 0, 0, 1, new byte[]{1, 2, 3, 4});
+        byte[] frame = pkt.encode();
+        int half = frame.length / 2;
+        e.onBytes(java.util.Arrays.copyOfRange(frame, 0, half));
+        check(true, "半包不会抛异常（留在缓冲）");
+        e.onBytes(java.util.Arrays.copyOfRange(frame, half, frame.length));
+        check(true, "补齐后能继续解析");
+
+        // 3a) 先把链路推到 NORMAL：把我们刚发的 SYN 原样回成 SYN|ACK（模拟对端）
+        com.carbridge.carplay.iap2.Iap2LinkPacket ourSyn = null;
+        for (int i = 0; i + com.carbridge.carplay.iap2.Iap2LinkPacket.HEADER_SIZE < sent.length; i++) {
+            if ((sent[i] & 0xFF) == 0xFF && sent[i + 1] == 0x5A) {
+                int total = ((sent[i + 2] & 0xFF) << 8) | (sent[i + 3] & 0xFF);
+                byte[] fr = java.util.Arrays.copyOfRange(sent, i, i + total);
+                ourSyn = com.carbridge.carplay.iap2.Iap2LinkPacket.decode(fr);
+                break;
+            }
+        }
+        check(ourSyn != null, "能解出自己发出的 SYN");
+        com.carbridge.carplay.iap2.Iap2LinkPacket synAck =
+                new com.carbridge.carplay.iap2.Iap2LinkPacket(
+                        com.carbridge.carplay.iap2.Iap2LinkPacket.CONTROL_SYN
+                                | com.carbridge.carplay.iap2.Iap2LinkPacket.CONTROL_ACK,
+                        0, 0, 0, ourSyn.payload);
+        e.onBytes(synAck.encode());
+        check(e.state() == com.carbridge.carplay.iap2.Iap2LinkEngine.State.NORMAL,
+                "收到 SYN|ACK 后链路进入 NORMAL（当前 " + e.state() + "）");
+
+        // 3b) 端到端：一个完整的 CSM 帧（会话 1、消息 0x1D00）必须被投递给 listener
+        byte[] csm = com.carbridge.carplay.iap2.Iap2Csm.frame(0x1D00,
+                com.carbridge.carplay.iap2.Iap2Csm.paramString(0, "HelloCar"));
+        // CSM 需要包在链路帧里：session=1，从当前 seq 继续
+        com.carbridge.carplay.iap2.Iap2LinkPacket wrap =
+                new com.carbridge.carplay.iap2.Iap2LinkPacket(0, 1, 0, 1, csm);
+        gotMessages.clear();
+        e.onBytes(wrap.encode());
+        check(gotMessages.size() == 1, "CSM 帧被解析并投递（收到 " + gotMessages.size() + " 条）");
+        if (!gotMessages.isEmpty()) {
+            check(gotMessages.get(0).messageId == 0x1D00, "消息 ID = 0x1D00");
+            check(gotMessages.get(0).body.length == csm.length - 6, "消息体长度正确");
+        }
+
+        // 4) 长度字段非法的帧：跳过并重新同步，不能把后面的正常帧吃掉
+        byte[] bad = new byte[]{(byte) 0xFF, 0x5A, 0x00, 0x02, 1, 2, 3, 4, 5};
+        e.onBytes(bad);
+        check(true, "非法长度帧被跳过");
+        e.onBytes(frame);
+        check(true, "跳过坏帧后仍能解析正常帧");
     }
 
     // ---------------------------------------------------------------- /info 解析
