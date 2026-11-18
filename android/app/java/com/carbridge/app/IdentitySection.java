@@ -48,7 +48,7 @@ public final class IdentitySection {
 
         String name = null;
         try {
-            BluetoothAdapter a = BluetoothAdapter.getDefaultAdapter();
+            BluetoothAdapter a = com.carbridge.carplay.bt.Bt.adapter(act);
             if (a != null) name = a.getName();
         } catch (Throwable t) {
             com.carbridge.carplay.util.Diag.w("IdentitySection.name", t);

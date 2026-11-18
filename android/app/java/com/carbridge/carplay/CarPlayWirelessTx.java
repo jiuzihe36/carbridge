@@ -389,7 +389,7 @@ public final class CarPlayWirelessTx {
                 carBtAddress = peerAddr;
                 // 通话音频交给这台设备的 HFP 通路
                 android.bluetooth.BluetoothAdapter a =
-                        android.bluetooth.BluetoothAdapter.getDefaultAdapter();
+                        com.carbridge.carplay.bt.Bt.adapter(CarPlayWirelessTx.this.ctx);
                 if (a != null) {
                     android.bluetooth.BluetoothDevice d = a.getRemoteDevice(peerAddr);
                     if (d != null) routeCallAudioToCar(d);
@@ -484,7 +484,7 @@ public final class CarPlayWirelessTx {
     private String btName() {
         try {
             android.bluetooth.BluetoothAdapter a =
-                    android.bluetooth.BluetoothAdapter.getDefaultAdapter();
+                    com.carbridge.carplay.bt.Bt.adapter(this.ctx);
             if (a != null && a.getName() != null && !a.getName().isEmpty()) {
                 return a.getName();
             }
@@ -575,7 +575,7 @@ public final class CarPlayWirelessTx {
             if (state != State.LISTENING_BT) return;
             if (!com.carbridge.carplay.bt.CarPlaySdpBeacon.acceptLoopsAlive()) {
                 android.bluetooth.BluetoothAdapter a =
-                        android.bluetooth.BluetoothAdapter.getDefaultAdapter();
+                        com.carbridge.carplay.bt.Bt.adapter(CarPlayWirelessTx.this.ctx);
                 boolean ok = com.carbridge.carplay.bt.CarPlaySdpBeacon
                         .reviveIfDead(a, new com.carbridge.carplay.bt.CarPlaySdpBeacon.Log() {
                             @Override public void onLog(String line) { log(line); }

@@ -322,7 +322,7 @@ public final class BtIap2Server {
         final AtomicBoolean connected = new AtomicBoolean(false);
         Thread watchdog = null;
         try {
-            BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
+            BluetoothAdapter adapter = Bt.adapterDeprecated();
             if (adapter != null) {
                 try {
                     adapter.cancelDiscovery();

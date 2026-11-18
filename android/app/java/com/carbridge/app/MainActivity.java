@@ -1505,7 +1505,7 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
     /* JADX INFO: Access modifiers changed from: private */
     public void runConnectionSelfCheck() {
         log("—— 连接自检 ——");
-        for (java.lang.String str : com.carbridge.carplay.bt.CarPlaySdpBeacon.diagnose(android.bluetooth.BluetoothAdapter.getDefaultAdapter()).split("\n")) {
+        for (java.lang.String str : com.carbridge.carplay.bt.CarPlaySdpBeacon.diagnose(com.carbridge.carplay.bt.Bt.adapter(this)).split("\n")) {
             log(str);
         }
         try {

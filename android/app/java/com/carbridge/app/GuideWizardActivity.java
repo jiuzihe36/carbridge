@@ -189,7 +189,7 @@ public class GuideWizardActivity extends Activity {
      */
     private boolean isBtOn() {
         try {
-            BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
+            BluetoothAdapter adapter = com.carbridge.carplay.bt.Bt.adapter(this);
             return adapter != null && adapter.isEnabled();
         } catch (SecurityException e) {
             return false;

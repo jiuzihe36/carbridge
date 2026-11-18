@@ -116,7 +116,7 @@ public final class CarPlaySdpBeacon {
     public static boolean setDiscoverable(int seconds) {
         try {
             android.bluetooth.BluetoothAdapter adapter =
-                    android.bluetooth.BluetoothAdapter.getDefaultAdapter();
+                    Bt.adapterDeprecated();
             if (adapter == null) return false;
             java.lang.reflect.Method m = adapter.getClass()
                     .getMethod("setDiscoverable", int.class, android.os.Bundle.class);

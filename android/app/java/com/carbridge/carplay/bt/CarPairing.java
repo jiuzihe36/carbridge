@@ -28,7 +28,7 @@ public final class CarPairing {
      * <p>已知地址优先；其次看 CoD 是否为主「车载音频」。
      */
     public static BluetoothDevice findCar() {
-        BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
+        BluetoothAdapter adapter = Bt.adapterDeprecated();
         if (adapter == null) return null;
         Set<BluetoothDevice> bonded = adapter.getBondedDevices();
         String known = knownCarAddress();

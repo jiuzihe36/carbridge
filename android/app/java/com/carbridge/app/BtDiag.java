@@ -34,7 +34,7 @@ public final class BtDiag {
 
     /** 跑一次完整诊断，结果直接进 App 日志（用户导出日志给我就行）。 */
     public static void run(final Context ctx, final Log log) {
-        final BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
+        final BluetoothAdapter adapter = com.carbridge.carplay.bt.Bt.adapter(ctx);
         if (adapter == null) {
             log.onLog("✗ 没有蓝牙适配器");
             return;

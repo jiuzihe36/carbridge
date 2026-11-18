@@ -190,7 +190,7 @@ public final class BtIdentity {
 
     private static String viaAdapter() {
         try {
-            BluetoothAdapter a = BluetoothAdapter.getDefaultAdapter();
+            BluetoothAdapter a = Bt.adapterDeprecated();
             if (a == null) return null;
             return normalize(a.getAddress());
         } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("BtIdentity", t);

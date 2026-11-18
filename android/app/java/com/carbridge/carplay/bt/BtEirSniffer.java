@@ -71,7 +71,7 @@ public final class BtEirSniffer {
         if (running) return;
         BluetoothAdapter adapter;
         try {
-            adapter = BluetoothAdapter.getDefaultAdapter();
+            adapter = Bt.adapter(BtEirSniffer.this.ctx);
         } catch (Throwable t) {
             listener.onLog("EIR 扫描：拿不到 BluetoothAdapter: " + t);
             return;
@@ -141,7 +141,7 @@ public final class BtEirSniffer {
             if (!running) return;
             BluetoothAdapter adapter;
             try {
-                adapter = BluetoothAdapter.getDefaultAdapter();
+                adapter = Bt.adapter(BtEirSniffer.this.ctx);
             } catch (Throwable t) {
                 return;
             }
@@ -169,7 +169,7 @@ public final class BtEirSniffer {
             receiver = null;
         }
         try {
-            BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
+            BluetoothAdapter adapter = Bt.adapter(BtEirSniffer.this.ctx);
             if (adapter != null && adapter.isEnabled()) {
                 adapter.cancelDiscovery();
             }
