@@ -111,6 +111,12 @@ public final class AirPlayServer {
     // 统计 / 阶段
     private volatile int videoFrames;
     private volatile int audioPackets;
+    // ── 通话音频流（audioType=telephony）：假车机也要声明并接收，才能在本地验通话声音 ──
+    private DatagramSocket telephonySock;
+    private int telephonyPort;
+    private volatile byte[] telephonyKey;
+    private volatile long telephonyConnId;
+    private volatile int telephonyPackets;
     private volatile boolean sawAnnounce;
     private volatile boolean sawConfig;
 
@@ -184,6 +190,9 @@ public final class AirPlayServer {
         keepaliveSock = new DatagramSocket(0);
         keepalivePort = keepaliveSock.getLocalPort();
 
+        telephonySock = new DatagramSocket(0);
+        telephonyPort = telephonySock.getLocalPort();
+
         spawn("fakecar-video", new Runnable() {
             @Override
             public void run() {
@@ -194,6 +203,12 @@ public final class AirPlayServer {
             @Override
             public void run() {
                 audioLoop();
+            }
+        });
+        spawn("fakecar-telephony", new Runnable() {
+            @Override
+            public void run() {
+                telephonyLoop();
             }
         });
         spawn("fakecar-event", new Runnable() {
@@ -420,7 +435,14 @@ public final class AirPlayServer {
         Map<String, Object> key = map(
                 "uuid", KEY_UUID, "name", "eso_playback", "hidDescriptor", KEY_DESCRIPTOR);
         List<Object> displays = java.util.Arrays.asList((Object) display);
-        List<Object> audioFormats = java.util.Arrays.asList((Object) audioFmt);
+        // telephony 档：真车用 type=100 + audioType=telephony + PCM 44.1k 单声道（1<<10）。
+        // 声明这一条，发送端才会开「通话音频流」——本机就能验「打电话声音走车机」。
+        Map<String, Object> telFmt = map(
+                "type", 100L,
+                "audioType", "telephony",
+                "audioOutputFormats", 0x400L,
+                "audioInputFormats", 0L);
+        List<Object> audioFormats = java.util.Arrays.asList((Object) audioFmt, (Object) telFmt);
         List<Object> hids = java.util.Arrays.asList((Object) touch, tel, key);
         Map<String, Object> root = map(
                 "deviceid", infoDeviceId,
@@ -456,6 +478,16 @@ public final class AirPlayServer {
                     }
                     outStreams.add(map("type", 110L, "dataPort", (long) videoPort));
                     emit("[ap] ✓ 屏幕流 SETUP type=110 connId=" + connId + " dataPort=" + videoPort);
+                } else if ("telephony".equalsIgnoreCase(String.valueOf(st.get("audioType")))) {
+                    telephonyConnId = connId;
+                    try {
+                        telephonyKey = AirPlayStreamCrypto.derive(shared, connId);
+                    } catch (GeneralSecurityException e) {
+                        emit("[ap] 通话音频密钥派生失败: " + e);
+                    }
+                    outStreams.add(map("type", type, "dataPort", (long) telephonyPort));
+                    emit("[ap] ✓ 通话音频流 SETUP audioType=telephony connId=" + connId
+                            + " dataPort=" + telephonyPort + "(UDP)");
                 } else if (type == 100 || type == 102) {
                     audioConnId = connId;
                     try {
@@ -553,6 +585,27 @@ public final class AirPlayServer {
         }
         if (videoFrames == 1) firePhase("screen");
         if (videoFrame != null) videoFrame.onFrame(videoFrames, avcc);
+    }
+
+    /** 通话音频收包：只统计 + 首包解密，用来证明「通话声确实送到车机了」。 */
+    private void telephonyLoop() {
+        byte[] buf = new byte[4096];
+        while (running) {
+            DatagramPacket p = new DatagramPacket(buf, buf.length);
+            try {
+                telephonySock.receive(p);
+            } catch (IOException e) {
+                if (running) emit("[ap] telephony recv error: " + e);
+                continue;
+            }
+            telephonyPackets++;
+            if (telephonyPackets == 1) {
+                emit("[ap] ✓ 通话音频首包 " + p.getLength() + "B（手机的通话声已送到车机）");
+            }
+            if (telephonyPackets % 200 == 0) {
+                emit("[ap] 通话音频已收 " + telephonyPackets + " 包");
+            }
+        }
     }
 
     private void audioLoop() {
