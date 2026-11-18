@@ -2206,13 +2206,6 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         });
     }
     /**
-     * 主按钮的两种形态：未连接 = 实心 Action Blue（页面上唯一的饱和色块），
-     * 已连接 = 同形状的描边（白底 + hairline），把视觉重心让给深色流向卡片。
-     *
-     * <p>形状不变（都是 9999 胶囊），只换填充与文字色，避免按钮在
-     * 「开始连接 → 断开」之间变形。
-     */
-    /**
      * 主按钮：空闲=蓝底白字「连接」，已连接=深红底红字「断开连接」。
      *
      * <p>⚠️ 这里以前把文字色设成 {@code accent}（蓝），而按钮底色也是 accent ——
