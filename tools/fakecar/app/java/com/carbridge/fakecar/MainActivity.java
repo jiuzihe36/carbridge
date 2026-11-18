@@ -168,6 +168,10 @@ public final class MainActivity extends Activity {
         log("目标手机先和本机蓝牙配对，再点「自动找手机并连接」");
         // 自动化用：adb shell am start -n com.carbridge.fakecar/.MainActivity --ez autoconnect true
         // 冒烟测试要把「点按钮」这一步也自动化，否则每次都要人手点。
+        // 一进来就把保活服务拉起来：平板（vivo）会把后台进程冻死，
+        // 只靠「点连接后才启动」的话，放一会儿整个 App 就没了 —— 现场表现就是
+        // 「假车机连不上」，其实进程早被杀掉。
+        KeepAliveService.start(this);
         autoConnectIfRequested();
         log("屏幕流会自动渲染到上方画面，直接点画面即可触摸回传手机");
     }
