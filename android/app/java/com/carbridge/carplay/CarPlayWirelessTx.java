@@ -9,12 +9,14 @@ import android.os.Looper;
 import com.carbridge.carplay.bt.AppleDeviceIe;
 import com.carbridge.carplay.bt.BtEirSniffer;
 import com.carbridge.carplay.bt.BtIap2Server;
+import com.carbridge.carplay.bt.BtIdentity;
 import com.carbridge.carplay.iap2.Iap2Csm;
 import com.carbridge.carplay.iap2.Iap2LinkEngine;
 import com.carbridge.carplay.iap2.Iap2SenderSession;
 import com.carbridge.carplay.net.CtrlIntServer;
 import com.carbridge.carplay.net.MdnsCarPlay;
 import com.carbridge.carplay.net.WifiJoiner;
+import com.carbridge.carplay.util.Bg;
 
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -176,12 +178,15 @@ public final class CarPlayWirelessTx {
         if (state != State.IDLE && state != State.ERROR) return;
         setState(State.LISTENING_BT);
         enterStep(Step.BT_LISTEN);
-        realBtMac = BtIap2Server.realBluetoothAddress(ctx);
+        BtIdentity.Resolved identity = BtIdentity.resolve(ctx);
+        BtIdentity.remember(ctx, identity);
+        realBtMac = identity.mac;
         log("本机蓝牙身份：name=" + btName() + " mac="
-                + (realBtMac == null ? "（读不到）" : realBtMac));
+                + (realBtMac == null ? "（读不到）" : realBtMac + "（" + identity.source.label() + "）"));
         if (realBtMac == null) {
-            log("WARN: 拿不到真实蓝牙 MAC（Android 11+ 应用层受限），"
-                    + "ctrl mDNS 的 TXT id 会缺失 → 车机可能不邀请");
+            log("⚠ 拿不到真实蓝牙 MAC：Android 11+ 应用层受限。"
+                    + "ctrl mDNS 的 TXT id 会缺失 → 车机不会邀请 CarPlay。"
+                    + "到「本机身份 → 蓝牙地址」手动填写一次（车机蓝牙列表里能看到它）。");
         }
         btServer = new BtIap2Server(new BtIap2Server.Listener() {
             @Override public void onLog(String msg) { log(msg); }
@@ -238,7 +243,7 @@ public final class CarPlayWirelessTx {
         if (addr == null || addr.isEmpty()) return false;
         if (carBtAddress != null && carBtAddress.equalsIgnoreCase(addr)) return true;
         try {
-            android.bluetooth.BluetoothDevice car = com.carbridge.app.CarPairing.findCar();
+            android.bluetooth.BluetoothDevice car = com.carbridge.carplay.bt.CarPairing.findCar();
             return car != null && addr.equalsIgnoreCase(car.getAddress());
         } catch (Throwable t) {
             return false;
@@ -252,7 +257,7 @@ public final class CarPlayWirelessTx {
             if (ie != null) return ie;
         }
         try {
-            android.bluetooth.BluetoothDevice car = com.carbridge.app.CarPairing.findCar();
+            android.bluetooth.BluetoothDevice car = com.carbridge.carplay.bt.CarPairing.findCar();
             if (car != null) {
                 return eirByAddr.get(car.getAddress().toUpperCase(java.util.Locale.US));
             }
@@ -286,8 +291,8 @@ public final class CarPlayWirelessTx {
         wifiRetry = 0;
         joinedBssid = null;
         // 退出车机模式：把本机铃声音量还回去（静音过的话）
-        com.carbridge.app.CarAudioRouter.restoreRingVolume(ctx,
-                new com.carbridge.app.CarAudioRouter.Log() {
+        com.carbridge.carplay.audio.CarAudioRouter.restoreRingVolume(ctx,
+                new com.carbridge.carplay.audio.CarAudioRouter.Log() {
                     @Override
                     public void onLog(String line) {
                         log(line);
@@ -305,7 +310,7 @@ public final class CarPlayWirelessTx {
         if (sock != null) {
             try {
                 sock.close();
-            } catch (Throwable ignored) {
+            } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("CarPlayWirelessTx", t);
             }
         }
     }
@@ -344,7 +349,7 @@ public final class CarPlayWirelessTx {
         if (sock != null) {
             try {
                 sock.close();
-            } catch (Throwable ignored) {
+            } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("CarPlayWirelessTx", t);
             }
         }
     }
@@ -379,7 +384,7 @@ public final class CarPlayWirelessTx {
             try {
                 log("车机蓝牙已连上: " + (peerName == null || peerName.isEmpty() ? "?" : peerName)
                         + " [" + peerAddr + "]");
-                com.carbridge.app.CarPairing.rememberCarAddress(peerAddr);
+                com.carbridge.carplay.bt.CarPairing.rememberCarAddress(peerAddr);
                 // 记下车机地址 → 之后只认这台设备的 EIR（防伪造）
                 carBtAddress = peerAddr;
                 // 通话音频交给这台设备的 HFP 通路
@@ -483,7 +488,7 @@ public final class CarPlayWirelessTx {
             if (a != null && a.getName() != null && !a.getName().isEmpty()) {
                 return a.getName();
             }
-        } catch (Throwable ignored) {
+        } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("CarPlayWirelessTx", t);
         }
         return "iPhone";
     }
@@ -606,7 +611,8 @@ public final class CarPlayWirelessTx {
     };
 
     private void readLoop(final InputStream in, final Iap2SenderSession session) {
-        new Thread(new Runnable() {
+        // 阻塞在 in.read() 上的读循环：对端不发数据就一直挂着，放池里免得每次重连新建线程
+        Bg.run("wtx-iap2-read", new Runnable() {
             @Override public void run() {
                 byte[] buf = new byte[4096];
                 while (state != State.IDLE && iap2 == session) {
@@ -630,7 +636,7 @@ public final class CarPlayWirelessTx {
                     onLinkLost("iAP2 链路断开");
                 }
             }
-        }, "carplay-iap2-read").start();
+        });
     }
 
     /**
@@ -656,7 +662,7 @@ public final class CarPlayWirelessTx {
         if (s != null) {
             try {
                 s.close();
-            } catch (Throwable ignored) {
+            } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("CarPlayWirelessTx", t);
             }
         }
         // ⚠️ **必须把 RFCOMM socket 真的关掉**：以前这里只把引用置空，
@@ -667,7 +673,7 @@ public final class CarPlayWirelessTx {
         if (sock != null) {
             try {
                 sock.close();
-            } catch (Throwable ignored) {
+            } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("CarPlayWirelessTx", t);
             }
         }
         // 允许蓝牙层接收下一路入站/出站连接（双通道只会有一个会话）。
@@ -869,7 +875,9 @@ public final class CarPlayWirelessTx {
         if (ctrlPort < 0) {
             ctrlPort = CtrlIntServer.DEFAULT_PORT;   // 起不来也要广播，让车机来连（会失败，但有日志）
         }
-        mdns.advertiseCtrl(ctrlPort, realBtMac);
+        // 本轮会话的版本号：TXT 与 RTSP/SETUP 用同一个值（改完设置不用重启 App）
+        CarPlayCtrlCompat.apply(ctx);
+        mdns.advertiseCtrl(ctrlPort, realBtMac, CarPlayCtrlCompat.srcvers(ctx));
         airplayPrefix = MdnsCarPlay.localPrefix(parseAddr(localIp));
         mdns.discoverAirPlay(airplayPrefix);
         // 入网完成 → 收掉 EIR 扫描（信息拿到了就别占着蓝牙射频）
@@ -966,7 +974,7 @@ public final class CarPlayWirelessTx {
      * 把通话音频交给车机。
      */
     private void routeCallAudioToCar() {
-        routeCallAudioToCar(com.carbridge.app.CarPairing.findCar());
+        routeCallAudioToCar(com.carbridge.carplay.bt.CarPairing.findCar());
     }
 
         /**
@@ -979,8 +987,8 @@ public final class CarPlayWirelessTx {
         }
         if (callAudioRouted) return;
         // 只有真的把请求发出去才算「已处理」——失败要允许下一次（AirPlay 端点就绪时）重试。
-        callAudioRouted = com.carbridge.app.CarAudioRouter.connectCarHeadset(ctx, car,
-                new com.carbridge.app.CarAudioRouter.Log() {
+        callAudioRouted = com.carbridge.carplay.audio.CarAudioRouter.connectCarHeadset(ctx, car,
+                new com.carbridge.carplay.audio.CarAudioRouter.Log() {
                     @Override
                     public void onLog(String line) {
                         log(line);

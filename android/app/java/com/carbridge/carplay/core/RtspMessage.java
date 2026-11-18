@@ -12,7 +12,11 @@ import java.util.Map;
  */
 public final class RtspMessage {
 
-    public static final String USER_AGENT = "AirPlay/566.25.21";
+    /** 与 SETUP 里的 sourceVersion 保持一致（同一个发送端不能自报两个版本）。 */
+    public static String userAgent() {
+        return AirPlaySetup.USER_AGENT;
+    }
+
     public static final String CONTENT_TYPE_BPLIST = "application/x-apple-binary-plist";
 
     private RtspMessage() {
@@ -34,7 +38,9 @@ public final class RtspMessage {
         StringBuilder h = new StringBuilder();
         h.append(method).append(' ').append(path).append(" RTSP/1.0\r\n");
         h.append("CSeq: ").append(cseq).append("\r\n");
-        h.append("User-Agent: ").append(USER_AGENT).append("\r\n");
+        h.append("User-Agent: ").append(userAgent()).append("\r\n");
+        // 真 iPhone 每条 RTSP 都带这个头；少数车机用它区分「iPhone 客户端」和第三方实现
+        h.append("X-Apple-Client-Name: iPhone\r\n");
         if (extraHeaders != null) {
             for (String e : extraHeaders) {
                 if (e != null && !e.isEmpty()) h.append(e).append("\r\n");

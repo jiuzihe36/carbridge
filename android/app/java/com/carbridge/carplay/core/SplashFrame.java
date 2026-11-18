@@ -37,11 +37,24 @@ public final class SplashFrame {
     private static final byte[] START_CODE = {0, 0, 0, 1};
 
     private final Bitmap logo;
+    /** 全屏背景图（Car+ 的蓝渐变）。为 null 时用纯深色底。 */
+    private final Bitmap background;
     private final String brand;
     private final String subtitle;
     private volatile Frame cached;
 
     public SplashFrame(Bitmap logo, String brand, String subtitle) {
+        this(null, logo, brand, subtitle);
+    }
+
+    /**
+     * @param background 全屏背景（会按「cover」铺满整块画布，等比放大后居中裁切）
+     * @param logo       居中的标志（可带透明通道）
+     * @param brand      标志下方的品牌字
+     * @param subtitle   再下面的副标题
+     */
+    public SplashFrame(Bitmap background, Bitmap logo, String brand, String subtitle) {
+        this.background = background;
         this.logo = logo;
         this.brand = brand == null ? "" : brand;
         this.subtitle = subtitle == null ? "" : subtitle;
@@ -232,40 +245,54 @@ public final class SplashFrame {
         return v < 0 ? 0 : (v > 255 ? 255 : v);
     }
 
-    /** 画品牌开屏：深色底 + 居中 logo + 品牌名 + 副标题。 */
-    private void drawBrand(Canvas c, int w, int h) {
-        c.drawColor(Color.rgb(14, 14, 16));   // 深色底
+    /** 按 cover 方式铺满：等比放大到覆盖整块画布，再居中裁切（不会留黑边、不拉伸变形）。 */
+    private static void drawCover(Canvas c, Bitmap bmp, int w, int h, Paint p) {
+        float scale = Math.max(w / (float) bmp.getWidth(), h / (float) bmp.getHeight());
+        float dw = bmp.getWidth() * scale;
+        float dh = bmp.getHeight() * scale;
+        float left = (w - dw) / 2f;
+        float top = (h - dh) / 2f;
+        c.save();
+        c.clipRect(0, 0, w, h);
+        c.drawBitmap(bmp, null, new android.graphics.RectF(left, top, left + dw, top + dh), p);
+        c.restore();
+    }
 
+    /** 画品牌开屏：优先用全屏背景图（cover 铺满），否则深色底；然后居中 logo + 品牌名 + 副标题。 */
+    private void drawBrand(Canvas c, int w, int h) {
         float cx = w / 2f;
         float cy = h / 2f;
 
-        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-
-        // logo：缩放保持比例，占画布高度的 ~34%
-        float logoSize = h * 0.34f;
-        if (logo != null && logo.getWidth() > 0 && logo.getHeight() > 0) {
-            float scale = Math.min(logoSize / logo.getWidth(), logoSize / logo.getHeight());
-            int dw = Math.round(logo.getWidth() * scale);
-            int dh = Math.round(logo.getHeight() * scale);
-            // 品牌名放 logo 下方，所以 logo 整体上移
-            float top = cy - logoSize * 0.9f;
-            c.drawBitmap(Bitmap.createScaledBitmap(logo, dw, dh, true),
-                    cx - dw / 2f, top, p);
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+        if (background != null && background.getWidth() > 0 && background.getHeight() > 0) {
+            drawCover(c, background, w, h, p);
+        } else {
+            c.drawColor(Color.rgb(14, 14, 16));   // 深色底
         }
 
-        // 品牌名
+        // logo：等比缩放，高占画布 30%，中心放在 40% 高度处（上留白 > 下留白，和真机开屏一致）
+        float logoSize = h * 0.26f;
+        float logoCenterY = h * 0.38f;
+        if (logo != null && logo.getWidth() > 0 && logo.getHeight() > 0) {
+            float scale = Math.min(logoSize / logo.getHeight(), (w * 0.8f) / logo.getWidth());
+            int dw = Math.round(logo.getWidth() * scale);
+            int dh = Math.round(logo.getHeight() * scale);
+            c.drawBitmap(Bitmap.createScaledBitmap(logo, dw, dh, true),
+                    cx - dw / 2f, logoCenterY - dh / 2f, p);
+        }
+
+        // 品牌名（基线固定在 68% 高度，任何 logo 宽高比都不会压到标志）
         p.setColor(Color.WHITE);
-        p.setTextSize(h * 0.14f);
+        p.setTextSize(h * 0.12f);
         p.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
         p.setTextAlign(Paint.Align.CENTER);
-        float brandY = cy + logoSize * 0.35f;
-        c.drawText(brand, cx, brandY, p);
+        c.drawText(brand, cx, h * 0.70f, p);
 
         // 副标题
-        p.setColor(Color.rgb(140, 140, 148));
-        p.setTextSize(h * 0.055f);
+        p.setColor(Color.rgb(150, 150, 158));
+        p.setTextSize(h * 0.05f);
         p.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
-        c.drawText(subtitle, cx, brandY + h * 0.09f, p);
+        c.drawText(subtitle, cx, h * 0.80f, p);
     }
 
     // ================================================================== 工具

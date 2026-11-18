@@ -11,7 +11,6 @@ public final class X25519 {
     private static final BigInteger P = BigInteger.ONE.shiftLeft(255).subtract(BigInteger.valueOf(19));
     private static final BigInteger A24 = BigInteger.valueOf(121665);
     private static final BigInteger NINE = BigInteger.valueOf(9);
-    private static final BigInteger TWO = BigInteger.valueOf(2);
 
     private static final SecureRandom RANDOM = new SecureRandom();
 

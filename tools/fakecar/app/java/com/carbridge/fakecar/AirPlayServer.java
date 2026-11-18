@@ -124,6 +124,13 @@ public final class AirPlayServer {
     private int eventCounter;
     private int eventCseq = 1;
 
+    /** /info 里自报的身份，默认用真车（Desay SV / 320.17.7）。 */
+    public volatile String infoDeviceId = "88:BD:78:7A:56:09";
+    public volatile String infoModel    = "Desay SV";
+    public volatile String infoMaker    = "Desay SV";
+    public volatile String infoName     = "CarPlay";
+    public volatile String infoSrcvers  = "320.17.7";
+
     public AirPlayServer(Log log, Phase phase, VideoFrame videoFrame, int apPort) {
         this.log = log;
         this.phase = phase;
@@ -400,7 +407,7 @@ public final class AirPlayServer {
                 "widthPixels", 1920L,
                 "heightPixels", 720L,
                 "uuid", "00000000-0000-0000-0000-000000000001",
-                "maxFPS", 60L);
+                "maxFPS", 30L);
         Map<String, Object> audioFmt = map(
                 "type", 100L,
                 "audioType", "media",
@@ -416,7 +423,11 @@ public final class AirPlayServer {
         List<Object> audioFormats = java.util.Arrays.asList((Object) audioFmt);
         List<Object> hids = java.util.Arrays.asList((Object) touch, tel, key);
         Map<String, Object> root = map(
-                "deviceid", "00:00:00:00:00:00",
+                "deviceid", infoDeviceId,
+                "model", infoModel,
+                "manufacturer", infoMaker,
+                "name", infoName,
+                "srcvers", infoSrcvers,
                 "displays", displays,
                 "audioFormats", audioFormats,
                 "hidDevices", hids);
@@ -812,7 +823,10 @@ public final class AirPlayServer {
 
     private static byte[] rtspOk(String cseq, byte[] body) {
         if (body == null) {
-            return ("RTSP/1.0 200 OK\r\nCSeq: " + cseq + "\r\n\r\n").getBytes(StandardCharsets.ISO_8859_1);
+            return ("RTSP/1.0 200 OK\r\nCSeq: " + cseq
+                    + "\r\nServer: AirTunes/320.17.7"
+                    + "\r\nX-Apple-HKP: 0"
+                    + "\r\n\r\n").getBytes(StandardCharsets.ISO_8859_1);
         }
         return concat(
                 ("RTSP/1.0 200 OK\r\nCSeq: " + cseq

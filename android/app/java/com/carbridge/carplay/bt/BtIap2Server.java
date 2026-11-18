@@ -7,7 +7,7 @@ import android.bluetooth.BluetoothSocket;
 import android.content.Context;
 import android.os.ParcelUuid;
 
-import com.carbridge.app.CarPairing;
+import com.carbridge.carplay.bt.CarPairing;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -82,45 +82,16 @@ public final class BtIap2Server {
         return probeEnabled;
     }
 
-        /**
-     * 真实蓝牙 MAC。**多级回退**（Android 11+ 应用层拿不到）： <ol> <li>隐藏 API {@code BluetoothAdapter.getAddress()}（旧系统有效）</li> <li>{@code Settings.Secure.bluetooth
-     * _address}（部分机型可读）</li> <li>{@code Settings.Global.bluetooth_address}</li> </ol> 都拿不到返回 null——此时 ctrl mDNS 的 TXT id 会缺失，车机可能不邀请。
+    /**
+     * 真实蓝牙 MAC。
+     *
+     * <p>实现统一走 {@link BtIdentity}（getAddress → Settings → root → 用户手填）。
+     * 以前这里只做前两步，于是「在界面手填了地址」和「AirPlay SETUP 里的 macAddress /
+     * iAP2 0x4300 的传输标识」是两条不同的取值路径 —— 手填生效了界面，却没进协议，
+     * 车机照样不认。收敛成单一来源后不会再分叉。
      */
     public static String realBluetoothAddress(Context ctx) {
-        // 1) 隐藏 API
-        try {
-            BluetoothAdapter a = BluetoothAdapter.getDefaultAdapter();
-            if (a != null) {
-                String mac = a.getAddress();
-                if (isRealMac(mac)) return mac;
-            }
-        } catch (Throwable ignored) {
-        }
-        // 2) Settings.Secure
-        String mac = readSetting(ctx, true);
-        if (isRealMac(mac)) return mac;
-        // 3) Settings.Global
-        mac = readSetting(ctx, false);
-        return isRealMac(mac) ? mac : null;
-    }
-
-    private static String readSetting(Context ctx, boolean secure) {
-        if (ctx == null) return null;
-        try {
-            android.content.ContentResolver cr = ctx.getContentResolver();
-            return secure
-                    ? android.provider.Settings.Secure.getString(cr, "bluetooth_address")
-                    : android.provider.Settings.Global.getString(cr, "bluetooth_address");
-        } catch (Throwable t) {
-            return null;
-        }
-    }
-
-    /** 过滤占位值与非法值。 */
-    private static boolean isRealMac(String mac) {
-        if (mac == null || mac.isEmpty()) return false;
-        if ("02:00:00:00:00:00".equals(mac)) return false;
-        return mac.matches("([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}");
+        return BtIdentity.resolve(ctx).mac;
     }
 
         /**
@@ -430,41 +401,6 @@ public final class BtIap2Server {
             Thread.currentThread().interrupt();
             return false;
         }
-    }
-
-    private Thread connectThread(final BluetoothDevice car, final UUID uuid) {
-        Thread t = new Thread(new Runnable() {
-            @Override
-            public void run() {
-                if (!running || sessionOpen) return;
-                BluetoothSocket socket = null;
-                try {
-                    BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
-                    if (adapter != null) {
-                        try {
-                            adapter.cancelDiscovery();
-                        } catch (Throwable ignored) {
-                        }
-                    }
-                    socket = car.createRfcommSocketToServiceRecord(uuid);
-                    socket.connect();
-                    if (!running || sessionOpen) {
-                        closeQuietly(socket);
-                        return;
-                    }
-                    deliver(socket, "主动连接 " + uuid);
-                } catch (Throwable e) {
-                    closeQuietly(socket);
-                    if (running && !sessionOpen) {
-                        listener.onLog("主动连接失败 " + uuid + ": "
-                                + e.getClass().getSimpleName()
-                                + (e.getMessage() == null ? "" : " " + e.getMessage()));
-                    }
-                }
-            }
-        }, "carplay-connect-" + uuid.toString().substring(0, 8));
-        t.setDaemon(true);
-        return t;
     }
 
     private static String safeName(BluetoothDevice d) {

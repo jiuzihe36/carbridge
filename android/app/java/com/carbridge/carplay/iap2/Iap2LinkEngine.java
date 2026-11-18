@@ -137,6 +137,9 @@ public final class Iap2LinkEngine {
     }
 
     private synchronized void onPacket(Iap2LinkPacket p) {
+        // 链路已经关闭就别再喂消息了：否则车机发过 RST 之后，积压/在途的包还会继续推进
+        // 会话状态机，最后把 CLOSED 覆盖回 READY —— 上层以为还连着，实际链路已死。
+        if (state == State.CLOSED) return;
         boolean syn = p.hasControl(Iap2LinkPacket.CONTROL_SYN);
         boolean ack = p.hasControl(Iap2LinkPacket.CONTROL_ACK);
 
@@ -261,7 +264,13 @@ public final class Iap2LinkEngine {
             cfg.sessions.addAll(peerConfig.sessions);
         }
         cfg.maxOutstandingPackets = 0x7F;
-        cfg.maxReceivePacketLength = 0xFFFF;
+        // ⚠️ maxLength 保持对端声明的值，不能放大成 0xFFFF：
+        //    真 iPhone / AADisplay 都是回显对端的值（mcarplay 真车对照）。
+        //    放大等于告诉车机「你尽管发大包」，一旦超过我们分片/解析的预算，
+        //    表现就是「某几条消息收不到、链路像卡住」。
+        if (peerConfig != null && peerConfig.maxReceivePacketLength > 0) {
+            cfg.maxReceivePacketLength = peerConfig.maxReceivePacketLength;
+        }
         Iap2LinkPacket p = new Iap2LinkPacket(
                 Iap2LinkPacket.CONTROL_SYN | Iap2LinkPacket.CONTROL_ACK, lastSentSeq, ackSeq & 0xFF, 0, cfg.encode());
         sendRaw(p.encode());

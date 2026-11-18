@@ -1,4 +1,4 @@
-package com.carbridge.app;
+package com.carbridge.carplay.audio;
 
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
@@ -29,7 +29,7 @@ public final class CarAudioRouter {
     }
 
     /** 持有 profile proxy，否则会被 GC 掉导致 HFP 断开。 */
-    private static BluetoothHeadset headsetProxy;
+    private static volatile BluetoothHeadset headsetProxy;
     /** HFP 代理已申请、正在等系统的 onServiceConnected 回调（Android 15 的异步形状）。 */
     private static volatile boolean headsetPending;
     /** 上次发起代理申请的时间：回调一直不来时不能永远「等」，否则再也不重试。 */

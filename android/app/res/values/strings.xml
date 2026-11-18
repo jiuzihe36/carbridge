@@ -7,6 +7,9 @@
     <string name="section_diagnosis">诊断</string>
     <string name="about_version_label">版本</string>
     <string name="subtitle">Car+ · CarPlay 手机侧发射器</string>
+    <!-- 车机开屏画面（Car+ 启动画面）上的字 -->
+    <string name="splash_brand">Car+ 车联</string>
+    <string name="splash_subtitle">正在连接车机…</string>
 
     <string name="state_idle">未连接</string>
     <string name="state_waiting">正在准备</string>
@@ -59,7 +62,7 @@
     <string name="selfcheck_btn">连接诊断</string>
     <string name="selfcheck_done">自检完成，结果已写入「运行日志」</string>
     <string name="autostart_btn">后台运行</string>
-    <string name="guide_desc">真 iPhone 靠车机自动识别，零触发。打开本 App 后一切自动。\n\n【上车前】\n① 打开本 App，确认「运行日志」里有「✓ CarPlay SDP 信标已注册（4 条）」\n② 点「连接诊断」，确认信标正常\n③ 点「后台运行」，允许后台运行 + 自启动\n\n【第一次配对】（关键，只做一次）\n④ 车机蓝牙：删除本机的旧配对记录\n⑤ 手机蓝牙：删除车机的旧配对记录\n⑥ 车机熄火重启一次（清掉车机的旧设备缓存，最稳）\n⑦ 车机重新搜索 → 配对（⚠️ 本 App 必须开着）\n⑧ 车机桌面 → 点「Apple CarPlay」图标（车机不会自己弹出来）\n\n【之后每次】\n打开本 App → 上车 → 车机桌面点「Apple CarPlay」。\n\n点了图标没反应？\n先等 20 秒再点一次（车机第一次要先查一遍手机暴露的蓝牙服务，查完才会认）。\n还是没反应：说明车机配对那一刻没读到信标。删除双方配对，确认 App 显示「信标正常」后重新配对一次。</string>
+    <string name="guide_desc">真 iPhone 靠车机自动识别，零触发。打开本 App 后一切自动。\n\n【上车前】\n① 打开本 App，确认「运行日志」里有「✓ CarPlay SDP 信标已注册」\n② 看「本机身份」：蓝牙地址不能是「未获取」—— 是的话填一次（车机蓝牙列表里能看到本机地址）\n③ 点「连接诊断」，确认信标正常\n④ 点「后台运行」，允许后台运行 + 自启动\n\n【第一次配对】（关键，只做一次）\n⑤ 车机蓝牙：删除本机的旧配对记录\n⑥ 手机蓝牙：删除车机的旧配对记录\n⑦ 车机熄火重启一次（清掉车机的旧设备缓存，最稳）\n⑧ 车机重新搜索 → 配对（⚠️ 本 App 必须开着）\n⑨ 车机桌面 → 点「Apple CarPlay」图标（车机不会自己弹出来）\n\n【之后每次】\n打开本 App → 上车 → 车机桌面点「Apple CarPlay」。\n\n点了图标没反应？\n先等 20 秒再点一次（车机第一次要先查一遍手机暴露的蓝牙服务，查完才会认）。\n还是没反应：说明车机配对那一刻没读到信标。删除双方配对，确认 App 显示「信标正常」后重新配对一次。\n\n【车机源码里查到的三条硬条件】\n① 点 CarPlay 前，车机的「车载热点 / Wi-Fi 热点」必须是开着的——没开它只弹一句提示，根本不发起连接\n② 车机蓝牙里若还连着别的设备，新的配对请求会被它直接拒绝（源码：preConnectedDevices 非空就 setPairingConfirmation(false)）\n③ 车机连上无线 CarPlay 后会主动关掉自己的蓝牙，断开后再开回来——这期间本 App 显示「蓝牙已关闭」是正常现象\n\n仍然不行：看「运行日志」里有没有「车机 ctrl 邀请」。没有 = 车机没匹配上本机蓝牙地址，回到第 ② 步核对。</string>
     <string name="quality_title">画质</string>
     <string name="quality_subtitle">投屏到车机的编码参数</string>
     <string name="quality_auto_fit">自动适配车机画布</string>
@@ -117,4 +120,31 @@
     <string name="repair_failed">清除失败，请到系统蓝牙设置里手动取消配对</string>
     <string name="repair_no_car">已配对设备里没找到车机</string>
     <string name="repair_no_beacon">CarPlay 信标没在跑，先别重配：请确认蓝牙已开、权限已给，再试一次</string>
+    <!-- ── 本机身份（车机识别三要素） ── -->
+    <string name="section_identity">本机身份</string>
+    <string name="identity_bt_name">蓝牙名称</string>
+    <string name="identity_bt_mac">蓝牙地址</string>
+    <string name="identity_sdp">车机识别</string>
+    <string name="identity_sdp_bt_off">蓝牙未开</string>
+    <string name="identity_srcvers">广播版本</string>
+    <string name="identity_bt_name_unknown">未知</string>
+    <string name="identity_mac_missing">未获取 · 点击填写</string>
+    <string name="identity_mac_hint">Android 11 起普通应用读不到本机蓝牙地址，而车机靠它匹配本机：缺了它，点 CarPlay 不会有反应。\n到车机「设置 → 蓝牙 → 已配对设备」抄下本机地址，填一次即可。</string>
+    <string name="mac_dialog_title">本机蓝牙地址</string>
+    <string name="mac_dialog_msg">车机蓝牙列表里能看到本机地址。填错一位，车机就不会邀请 CarPlay。</string>
+    <string name="mac_dialog_clear">清除</string>
+    <string name="mac_dialog_read">重新读取</string>
+    <string name="mac_saved">已保存 %1$s</string>
+    <string name="mac_invalid">地址格式不对：要 6 组十六进制，例如 A4:50:46:1C:2D:3E</string>
+    <string name="mac_empty">请先填写本机蓝牙地址</string>
+    <string name="mac_cleared">已清除手动填写的地址</string>
+    <string name="srcvers_dialog_title">广播版本（srcvers）</string>
+    <string name="srcvers_current">当前：%1$s</string>
+    <string name="srcvers_custom">自定义…</string>
+    <string name="srcvers_custom_title">自定义广播版本</string>
+    <string name="srcvers_custom_hint">真 iPhone 报的是它 AirPlay 栈的版本号，形如 950.7.1。填错车机可能不再邀请，改完可以切回 950.7.1。</string>
+    <string name="srcvers_invalid">版本号只能用数字、字母、点和连字符，最长 32 位</string>
+    <string name="srcvers_950">950.7.1 · 兼容模式（默认）</string>
+    <string name="srcvers_follow">跟随 AirPlay · 566.25.21</string>
+    <string name="srcvers_changed">广播版本已改为 %1$s，下次连接生效</string>
 </resources>

@@ -1,4 +1,4 @@
-package com.carbridge.app;
+package com.carbridge.carplay.bt;
 
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;

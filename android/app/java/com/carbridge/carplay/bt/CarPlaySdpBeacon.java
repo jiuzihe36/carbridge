@@ -242,7 +242,7 @@ public final class CarPlaySdpBeacon {
                         + ((System.currentTimeMillis() - at) / 1000) + "s），丢弃等它重连");
                 try {
                     pending.close();
-                } catch (Throwable ignored) {
+                } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("SdpBeacon", t);
                 }
                 return;
             }
@@ -270,9 +270,32 @@ public final class CarPlaySdpBeacon {
         return true;
     }
 
-    /** 监听线程挂了就重新注册（幂等）。返回是否健康。 */
+    /**
+     * 监听线程挂了就重新注册（幂等）。返回是否健康。
+     *
+     * <p>蓝牙关闭期间只提示一次。
+     *
+     * <p>车机源码（`CarPlayMgr.initCarplayManager()` → `mBlueToothMgr.setEnableBluetooth(false)`）
+     * 证实：无线 CarPlay 连上后车机**会主动关掉蓝牙**，断开后再开回来。
+     * 这段时间 SDP 记录必然全部失效，属于正常状态，不能当故障反复重注册 + 打 ⚠。
+     */
+    private static volatile boolean btOffNoted;
+
     public static synchronized boolean reviveIfDead(BluetoothAdapter adapter, Log log) {
-        if (started && acceptLoopsAlive() && REGISTERED.size() >= 3) return true;
+        if (started && acceptLoopsAlive() && REGISTERED.size() >= 3) {
+            btOffNoted = false;
+            return true;
+        }
+        // 车机关了蓝牙 → 静默等待（一次提示），别 reset、别重注册：
+        // 以前每 10 秒打两条「⚠ 信标不健康 + 蓝牙适配器不可用」，真出问题时全被淹掉。
+        if (adapter == null || !adapter.isEnabled()) {
+            if (!btOffNoted) {
+                btOffNoted = true;
+                emit(log, "蓝牙已关闭（车机连上无线 CarPlay 后会主动关蓝牙）→ SDP 信标暂停，蓝牙恢复后自动重挂");
+            }
+            return false;
+        }
+        btOffNoted = false;
         emit(log, "⚠ SDP 信标不健康（线程死亡或 UUID 不全）→ 重新注册");
         reset();
         return start(adapter, log);
@@ -283,7 +306,7 @@ public final class CarPlaySdpBeacon {
         for (BluetoothServerSocket s : SERVERS) {
             try {
                 s.close();
-            } catch (Throwable ignored) {
+            } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("SdpBeacon", t);
             }
         }
         SERVERS.clear();
@@ -293,7 +316,7 @@ public final class CarPlaySdpBeacon {
         if (pendingIap2 != null) {
             try {
                 pendingIap2.close();
-            } catch (Throwable ignored) {
+            } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("SdpBeacon", t);
             }
         }
         pendingIap2 = null;
@@ -345,6 +368,23 @@ public final class CarPlaySdpBeacon {
             sb.append("关键 UUID 没挂全，车机会认不出/连不上。请重新打开 App；仍然不全就重启手机蓝牙后再试。");
         }
         return sb.toString();
+    }
+
+    /**
+     * 界面一行状态（「本机身份」分组用）：只回答挂没挂上、挂了几条。
+     * 详细结论仍走 {@link #diagnose(BluetoothAdapter)}。
+     */
+    public static String statusLine() {
+        if (!started) return "未注册";
+        String base = "已注册 " + REGISTERED.size() + " 条";
+        if (!REGISTERED.contains(APPLE_DEVICE_UUID)) base += " · 缺 CarPlay 标记";
+        if (!acceptLoopsAlive()) base += " · 监听已停止";
+        return base;
+    }
+
+    /** 车机认 iPhone 的关键记录在不在（界面据此标红）。 */
+    public static boolean carplayMarkPresent() {
+        return started && REGISTERED.contains(APPLE_DEVICE_UUID) && acceptLoopsAlive();
     }
 
     /** 自检里给 UUID 配一句人话，别让用户对着一串十六进制猜。 */
@@ -422,7 +462,7 @@ public final class CarPlaySdpBeacon {
                 if (pendingIap2 != null) {
                     try {
                         pendingIap2.close();
-                    } catch (Throwable ignored) {
+                    } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("SdpBeacon", t);
                     }
                 }
                 pendingIap2 = socket;
@@ -441,7 +481,7 @@ public final class CarPlaySdpBeacon {
                     BluetoothSocket old = HELD.remove(0);
                     try {
                         if (old != null) old.close();
-                    } catch (Throwable ignored) {
+                    } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("SdpBeacon", t);
                     }
                 }
                 HELD.add(socket);            // 挂住，不做任何应答

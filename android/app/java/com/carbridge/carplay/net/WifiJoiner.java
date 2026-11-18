@@ -124,7 +124,7 @@ public final class WifiJoiner {
                     }
                 }
             }
-        } catch (Throwable ignored) {
+        } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("WifiJoiner", t);
         }
         // 1b) SSID 读不到（缺定位权限）→ 退到 BSSID 对账。
         //     车机 EIR 里播的 BSSID 是权威的「车机那个 AP」标识。
@@ -159,7 +159,7 @@ public final class WifiJoiner {
                     return true;
                 }
             }
-        } catch (Throwable ignored) {
+        } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("WifiJoiner", t);
         }
         return false;
     }
@@ -232,7 +232,7 @@ public final class WifiJoiner {
                         Thread.sleep(400);
                     } catch (InterruptedException ie) {
                         return;
-                    } catch (Throwable ignored) {
+                    } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("WifiJoiner", t);
                     }
                 }
                 if (!released) {
@@ -337,14 +337,14 @@ public final class WifiJoiner {
         if (cm != null && netCallback != null) {
             try {
                 cm.unregisterNetworkCallback(netCallback);
-            } catch (Throwable ignored) {
+            } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("WifiJoiner", t);
             }
         }
         netCallback = null;
         bound = null;
         try {
             ConnectivityManager.setProcessDefaultNetwork(null);
-        } catch (Throwable ignored) {
+        } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("WifiJoiner", t);
         }
     }
 }

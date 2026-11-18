@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  「进行中」那一步的卡片底：与 bg_card 同色、同圆角，只多 1dp accent 描边。
+  不换填充色 —— 换底色会让三步的卡片深浅不一，看起来像坏了一块；
+  只加一圈细蓝线，配合状态灯就能把视线钉在「现在该做的那一步」。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="@color/card" />
+    <corners android:radius="12dp" />
+    <stroke
+        android:width="1dp"
+        android:color="@color/accent" />
+</shape>

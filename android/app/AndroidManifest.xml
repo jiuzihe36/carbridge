@@ -73,6 +73,13 @@
             </intent-filter>
         </activity>
 
+        <!-- 首次连接向导：独立的三步说明页。只在 App 内跳转，不对外暴露，
+             所以 exported=false；主题沿用 application 上的 @style/AppTheme（纯黑） -->
+        <activity
+            android:name=".GuideWizardActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
+
         <!-- 一键分享日志用：只读、仅暴露会话日志文件 -->
         <provider
             android:name=".LogProvider"

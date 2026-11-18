@@ -63,20 +63,32 @@ public final class CtrlIntServer {
 
     private void acceptLoop() {
         while (running) {
-            Socket sock = null;
+            final Socket sock;
             try {
                 sock = server.accept();
-                handle(sock);
             } catch (Throwable t) {
                 if (running) listener.onLog("ctrl-int accept 失败: " + t);
-            } finally {
-                if (sock != null) {
+                continue;
+            }
+            // 每条连接一条线程。
+            // 车机的探测是「每会话 7 次 × 1.5s」，而 handle() 会读到 SO_TIMEOUT(3s) 才返回：
+            // 串行处理时，一条卡住的探测就把后面的探测全堵在 accept 队列里，
+            // 表现是「车机发过邀请，但我们这边像没收到」。
+            Thread t = new Thread(new Runnable() {
+                @Override
+                public void run() {
                     try {
-                        sock.close();
-                    } catch (Throwable ignored) {
+                        handle(sock);
+                    } finally {
+                        try {
+                            sock.close();
+                        } catch (Throwable ignored) {
+                        }
                     }
                 }
-            }
+            }, "ctrl-int-conn");
+            t.setDaemon(true);
+            t.start();
         }
     }
 

@@ -164,7 +164,7 @@ public final class BtEirSniffer {
         if (receiver != null) {
             try {
                 ctx.unregisterReceiver(receiver);
-            } catch (Throwable ignored) {
+            } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("BtEirSniffer", t);
             }
             receiver = null;
         }
@@ -173,7 +173,7 @@ public final class BtEirSniffer {
             if (adapter != null && adapter.isEnabled()) {
                 adapter.cancelDiscovery();
             }
-        } catch (Throwable ignored) {
+        } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("BtEirSniffer", t);
         }
     }
 
@@ -198,20 +198,20 @@ public final class BtEirSniffer {
         try {
             device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
             name = intent.getStringExtra(BluetoothDevice.EXTRA_NAME);
-        } catch (Throwable ignored) {
+        } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("BtEirSniffer", t);
         }
         if (device == null) return;
 
         String raw = null;
         try {
             raw = intent.getStringExtra(EXTRA_EIR_MANUFACTURER);
-        } catch (Throwable ignored) {
+        } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("BtEirSniffer", t);
         }
 
         String addr = "";
         try {
             addr = device.getAddress();
-        } catch (Throwable ignored) {
+        } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("BtEirSniffer", t);
         }
         if (name == null || name.isEmpty()) name = addr;
 

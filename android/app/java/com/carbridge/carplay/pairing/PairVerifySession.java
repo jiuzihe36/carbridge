@@ -22,7 +22,6 @@ public final class PairVerifySession {
             "Pair-Verify-Encrypt-Salt".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] INFO =
             "Pair-Verify-Encrypt-Info".getBytes(StandardCharsets.US_ASCII);
-    private static final byte[] CONTROL_SALT = "Control-Salt".getBytes(StandardCharsets.US_ASCII);
 
     private static final String MSG02 = "PV-Msg02";
     private static final String MSG03 = "PV-Msg03";

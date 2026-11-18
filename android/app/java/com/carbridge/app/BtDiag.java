@@ -1,4 +1,6 @@
 package com.carbridge.app;
+import com.carbridge.carplay.audio.CarAudioRouter;
+import com.carbridge.carplay.bt.CarPairing;
 
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
@@ -143,6 +145,7 @@ public final class BtDiag {
                 }
                 if (d == null) return;
                 log.onLog("• SDP 重查 " + name(d) + " [" + d.getAddress() + "]: " + join(u));
+                log.onLog("   " + verdict(u));
             }
         };
         try {
@@ -230,6 +233,36 @@ public final class BtDiag {
         } catch (Throwable t) {
             return "(无名)";
         }
+    }
+
+    /**
+     * 给一份对端 SDP 名单下结论。
+     *
+     * <p>依据（mcarplay 在奇瑞艾瑞泽8 上的实测）：车机自己若支持无线 CarPlay，SDP 里通常没有
+     * {@code …decacaff}（那是**配件端**才宣告的），但会有它自己的入口服务，例如奇瑞/德赛的
+     * {@code ec884348-cd41-40a2-9727-575d50bf1fd3}。所以“没有 cacaff”绝不能读成“车机不支持”，
+     * 那只是缺一条配件侧 UUID。
+     */
+    private static String verdict(ParcelUuid[] uuids) {
+        if (uuids == null || uuids.length == 0) {
+            return "→ 该设备 SDP 为空：它要么不是车机，要么配对时没暴露服务";
+        }
+        boolean carAccessory = false;
+        boolean cheryEntry = false;
+        for (ParcelUuid p : uuids) {
+            String s = p.toString().toLowerCase(java.util.Locale.US);
+            if (s.startsWith("00000000-deca-fade-deca-deafdecacaff")) carAccessory = true;
+            if (s.startsWith("ec884348-cd41-40a2-9727-575d50bf1fd3")) cheryEntry = true;
+        }
+        if (cheryEntry) {
+            return "→ 奇瑞/德赛车机入口（ec884348）在。这就是它的无线 CarPlay 服务，"
+                    + "回连会打到本机 …decacafe；若一直没动静，先重启中控（车机 CarPlay 进程会崩）";
+        }
+        if (carAccessory) {
+            return "→ 对端宣告了 …decacaff（配件端 iAP2），可以等它主动回连";
+        }
+        return "→ 既无 …decacaff 也无 ec884348：更像普通蓝牙设备（耳机/手机），"
+                + "不是支持无线 CarPlay 的车机";
     }
 
     private static String join(ParcelUuid[] uuids) {

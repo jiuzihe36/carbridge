@@ -5,8 +5,30 @@ package com.carbridge.carplay.core;
  */
 public final class AirPlaySetup {
 
-    public static final String USER_AGENT = "AirPlay/566.25.21";
-    public static final String SOURCE_VERSION = "566.25.21";
+    /**
+     * 发送端 AirPlay 版本号，**运行时可改**（界面「广播版本」那一行）。
+     *
+     * <p>真 iPhone 在三个地方报同一个值：RTSP 的 {@code User-Agent}、SETUP/ANNOUNCE 的
+     * {@code sourceVersion}/{@code srcvers}/{@code vv}、以及 {@code _carplay-ctrl._tcp} 的
+     * TXT {@code srcvers}。三者不同步就是「自相矛盾的发送端」，所以这里做成一个可变值，
+     * 由 {@link com.carbridge.carplay.CarPlayCtrlCompat} 统一设置（TXT 与协议一起变）。
+     *
+     * <p>默认 {@code 950.7.1}：2026-05-21 真机抓包里 iPhone 的 UA 就是这个值。
+     */
+    public static volatile String SOURCE_VERSION = "950.7.1";
+    public static volatile String USER_AGENT = "AirPlay/" + SOURCE_VERSION;
+
+    /** 设置版本号，同时把 User-Agent 一起对齐（两者必须一致）。 */
+    public static void setSourceVersion(String version) {
+        if (version == null) return;
+        String v = version.trim();
+        if (v.isEmpty() || v.length() > 32 || !v.matches("[0-9A-Za-z._-]+")) return;
+        SOURCE_VERSION = v;
+        USER_AGENT = "AirPlay/" + v;
+    }
+
+    /** 老代码里当常量用的那两处（默认值）。 */
+    public static final String DEFAULT_SOURCE_VERSION = "950.7.1";
     public static final String OS_NAME = "iPhone OS";
     public static final String OS_VERSION = "27.1";
     public static final String OS_BUILD_VERSION = "24A94425";

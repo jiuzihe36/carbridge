@@ -4,6 +4,8 @@ import android.net.nsd.NsdManager;
 import android.net.nsd.NsdServiceInfo;
 import android.os.Build;
 
+import com.carbridge.carplay.CarPlayCtrlCompat;
+
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -54,6 +56,14 @@ public final class MdnsCarPlay {
      * @param realMac 真实蓝牙 MAC；占位值会导致车机不邀请。
      */
     public void advertiseCtrl(int port, String realMac) {
+        advertiseCtrl(port, realMac, CarPlayCtrlCompat.MODE_950);
+    }
+
+    /**
+     * @param srcvers 写进 TXT 的协议版本。见 {@link CarPlayCtrlCompat}：
+     *                它和 RTSP 的 sourceVersion 不是同一个字段，不能混用。
+     */
+    public void advertiseCtrl(int port, String realMac, String srcvers) {
         if (ctrlInfo != null) {
             // 已注册过就复用（换端口才需要重来）
             return;
@@ -72,19 +82,29 @@ public final class MdnsCarPlay {
                 setTxtByReflection(info, "id", realMac);
             }
         }
-        // srcvers 必须与 RTSP 的 sourceVersion / User-Agent 完全一致
-        // （真机实测：三者对不上车机会拒绝）。
+        // ⚠️ 这里**不是** RTSP 的 Source-Version。真车 A/B（奥迪 MIB3 3315）：
+        //    填 566.25.21 时车机连 ctrl-int 探测都不发、0x4301 永不到达；
+        //    填 950.7.1 时同一台车 0.65 秒内就下发 0x4301。
         try {
-            info.setAttribute("srcvers", com.carbridge.carplay.core.AirPlaySetup.SOURCE_VERSION);
+            info.setAttribute("srcvers", srcvers);
         } catch (Throwable t) {
-            setTxtByReflection(info, "srcvers", com.carbridge.carplay.core.AirPlaySetup.SOURCE_VERSION);
+            setTxtByReflection(info, "srcvers", srcvers);
         }
         ctrlInfo = info;
 
         final NsdManager.RegistrationListener l = new NsdManager.RegistrationListener() {
             @Override public void onServiceRegistered(NsdServiceInfo serviceInfo) {
+                // 车机在 WiFi 上唯一能看到的手机身份就是这几个 TXT 字段。
+                // 以前只打名字和端口，`id` 缺失（拿不到真实 MAC）时日志里完全看不出来，
+                // 「车机点 CarPlay 没反应」就无从归因 —— 这里每次都打全。
                 listener.onLog("已广播 " + SERVICE_TYPE_CTRL + " " + serviceInfo.getServiceName()
-                        + " 端口 " + port);
+                        + " 端口 " + port
+                        + " · id=" + (realMac == null ? "（缺失）" : realMac)
+                        + " · srcvers=" + srcvers);
+                if (realMac == null) {
+                    listener.onLog("⚠ TXT 里没有 id（本机真实蓝牙 MAC）→ 车机无法匹配本机，"
+                            + "不会发 CarPlay 邀请。到「本机身份 → 蓝牙地址」填写一次。");
+                }
             }
 
             @Override public void onServiceUnregistered(NsdServiceInfo serviceInfo) {

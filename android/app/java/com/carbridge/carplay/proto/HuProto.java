@@ -1,4 +1,4 @@
-package com.carbridge.app;
+package com.carbridge.carplay.proto;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;

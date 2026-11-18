@@ -52,6 +52,11 @@ public final class Iap2Ids {
     // 位置信息
     public static final int START_LOCATION_INFORMATION = 0xFFFA;
 
+    // ExternalAccessory 会话（判断车机是否走 EA 通道用；EA = 触摸/按键的载体）
+    public static final int EA_OPEN_SESSION = 0xEA00;
+    public static final int EA_CLOSE_SESSION = 0xEA01;
+    public static final int EA_SESSION_STATUS = 0xEA03;
+
     // 车机的订阅请求（车机 → 手机）与其应答（手机 → 车机）
     public static final int START_MEDIA_LIBRARY_INFORMATION = 0x4C00;
     public static final int MEDIA_LIBRARY_INFORMATION = 0x4C01;

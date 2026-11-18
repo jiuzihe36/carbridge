@@ -58,6 +58,24 @@ public final class FakeCarController {
         this.videoFrame = videoFrame;
     }
 
+    /**
+     * 读外部配置：{@code <外部私有目录>/carprofile.json}。
+     * 里面写什么，假车机就按什么自报 —— 把真车抓到的 model/serial/want-list 填进去就是 1:1。
+     */
+    public void loadCarProfile(java.io.File dir) {
+        java.io.File f = new java.io.File(dir, "carprofile.json");
+        if (!f.isFile()) return;
+        try (java.io.FileInputStream in = new java.io.FileInputStream(f)) {
+            byte[] buf = new byte[(int) f.length()];
+            int n = in.read(buf);
+            org.json.JSONObject o = new org.json.JSONObject(new String(buf, 0, n, "UTF-8"));
+            sessionCfg.applyJson(o);
+            log.onLog("已加载 carprofile.json：" + f.getAbsolutePath());
+        } catch (Throwable t) {
+            log.onLog("carprofile.json 解析失败：" + t);
+        }
+    }
+
     public Iap2AccessorySession.Config config() {
         return sessionCfg;
     }
@@ -141,6 +159,11 @@ public final class FakeCarController {
                     emitPhase(name);
                 }
             }, videoFrame, sessionCfg.apPort);
+            // /info 的身份也跟车机档案走（1:1：deviceid=真车蓝牙MAC、model/maker/srcvers）
+            airPlay.infoDeviceId = sessionCfg.deviceId;
+            airPlay.infoModel    = sessionCfg.model;
+            airPlay.infoMaker    = sessionCfg.maker;
+            airPlay.infoSrcvers  = sessionCfg.fw;
             airPlay.start();
             emit("✓ AirPlay 接收端就绪（控制:" + sessionCfg.apPort
                     + " 视频:" + airPlay.videoPort() + " 音频UDP:" + airPlay.audioPort()

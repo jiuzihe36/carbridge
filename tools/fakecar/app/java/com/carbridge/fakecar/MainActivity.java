@@ -68,6 +68,9 @@ public final class MainActivity extends Activity {
                     }
                 });
 
+        // 真车 1:1：有 carprofile.json 就用它覆盖自报参数（model/serial/want-list/deviceId…）
+        controller.loadCarProfile(getExternalFilesDir(null));
+
         phoneIpEdit.setText(controller.config().phoneIp);
 
         // ── 屏幕流渲染 + 触摸回传 ──

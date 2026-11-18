@@ -1,6 +1,5 @@
 package com.carbridge.carplay.bridge;
 
-import com.carbridge.app.HuClient;
 import com.carbridge.carplay.core.AirPlayInfo;
 import com.carbridge.carplay.core.AirPlaySession;
 import com.carbridge.carplay.core.SplashFrame;
@@ -296,7 +295,7 @@ public final class CarPlayBridge implements AirPlaySession.Listener {
             return;
         }
         log("车机硬键 usage=0x" + Integer.toHexString(usage) + " → CarLife 键码 "
-                + carLife + "（" + com.carbridge.app.HuProto.CarHardKey.name(carLife) + "）");
+                + carLife + "（" + com.carbridge.carplay.proto.HuProto.CarHardKey.name(carLife) + "）");
         sink.onCarHardKey(carLife);
     }
 

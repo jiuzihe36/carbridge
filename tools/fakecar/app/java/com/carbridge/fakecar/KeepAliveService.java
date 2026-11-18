@@ -6,8 +6,12 @@ import android.app.NotificationManager;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ServiceInfo;
+import android.net.wifi.WifiManager;
+import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
+import android.util.Log;
 
 /**
  * 前台保活服务：锁屏后保持进程前台 + 持 partial wake lock，
@@ -18,7 +22,9 @@ public final class KeepAliveService extends Service {
     private static final String CHANNEL_ID = "fakecar_keepalive";
     private static final int NOTIF_ID = 1;
 
+    private static final String TAG = "fakecar-keepalive";
     private PowerManager.WakeLock wakeLock;
+    private WifiManager.WifiLock wifiLock;
 
     @Override
     public void onCreate() {
@@ -37,14 +43,37 @@ public final class KeepAliveService extends Service {
                 .setContentText("锁屏后 CarPlay 链路保持连接")
                 .setOngoing(true)
                 .build();
-        startForeground(NOTIF_ID, n);
+        // ⚠️ targetSdk 34+ 必须显式带 type，否则抛 MissingForegroundServiceTypeException
+        //    （异常在服务线程里，外面 catch 不到 → 保活服务看起来"启动成功"其实立刻死了）
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE);
+        } else {
+            startForeground(NOTIF_ID, n);
+        }
+        Log.i(TAG, "foreground started");
+
+        // Wi-Fi 高性能锁：息屏后 Wi-Fi 进入省电会直接把 AirPlay 流憋死
+        try {
+            WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            if (wm != null) {
+                wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "fakecar:wifi");
+                wifiLock.setReferenceCounted(false);
+                wifiLock.acquire();
+                Log.i(TAG, "wifi lock acquired");
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "wifi lock failed: " + t);
+        }
 
         // partial wake lock：CPU 不睡
         try {
             PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
             wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "fakecar:keepalive");
+            wakeLock.setReferenceCounted(false);
             wakeLock.acquire();
-        } catch (Throwable ignored) {
+            Log.i(TAG, "wake lock acquired");
+        } catch (Throwable t) {
+            Log.w(TAG, "wake lock failed: " + t);
         }
     }
 
@@ -55,6 +84,10 @@ public final class KeepAliveService extends Service {
 
     @Override
     public void onDestroy() {
+        if (wifiLock != null && wifiLock.isHeld()) {
+            try { wifiLock.release(); } catch (Throwable ignored) { }
+            wifiLock = null;
+        }
         if (wakeLock != null && wakeLock.isHeld()) {
             try {
                 wakeLock.release();

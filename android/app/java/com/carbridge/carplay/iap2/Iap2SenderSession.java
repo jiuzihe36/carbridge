@@ -104,14 +104,48 @@ public final class Iap2SenderSession {
      * 失败则回 0xAA04 拒绝而非 0xAA05 接受。
      */
     private volatile boolean verifyMfiSignature = false;
+    /** 从 0xAA01 证书解析出的车机 EC 公钥（P-256，验签用）。 */
+    private java.security.PublicKey peerEcKey;
+    /** 证书是否落在 Apple 的 OID 体系里（判定「是不是 Apple 签发的配件」）。 */
+    private boolean peerCertApple;
+
     /** 从 0xAA01 证书解析出的车机 RSA 公钥（验签用）。 */
     private MfiCrypto.RsaKey peerRsaKey;
     /** 上一次发出的挑战（验签要拿它算 SHA-1 比对）。 */
     private byte[] lastChallenge;
+
+    /** 内建定时器：挑战超时与认证后看门狗，不依赖上层 watchdog。 */
+    private final java.util.concurrent.ScheduledExecutorService authTimer =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(
+                    new java.util.concurrent.ThreadFactory() {
+                        @Override public Thread newThread(Runnable r) {
+                            Thread t = new Thread(r, "iap2-auth-timer");
+                            t.setDaemon(true);
+                            return t;
+                        }
+                    });
+    /** 每次发挑战自增，用来判定「定时器回来时还是不是同一轮」。 */
+    private volatile int challengeToken;
+    /** 上一份 0xAA03 签名（重放检测）与它对应的挑战。 */
+    private volatile byte[] lastResponseSig;
+    private volatile byte[] lastResponseFor;
+    /** 认证后是否真的等到了 0x5703 / 0x4301。 */
+    private volatile boolean wifiConfigSeen;
+    private volatile boolean endpointSeen;
     /** 设备状态问候 / 0x4300 只发一次。 */
     private boolean greeted;
+    /**
+     * 0x4300（CarPlayAvailability）每轮会话**至多一次**。
+     *
+     * <p>它是「询问车机能否开始 CarPlay」的全局请求，不是可重放的订阅：
+     * 超时兜底和晚到的 0x5703 都会走到发送点，没有闸门时同一轮会发两条语义相同的请求。
+     * 车机对这种重复请求没有定义行为（mcarplay 在真车上有过 0x4300 不再 ACK 的记录）。
+     */
+    private boolean carPlayAvailabilitySent;
     /** 车机在 0x1D01 里声明「能收哪些手机消息」（id 0x0007）。 */
     private final java.util.Set<Integer> accessoryAccepts = new java.util.HashSet<Integer>();
+    /** 车机在 0x1D01 里声明「它会发哪些消息」（id 0x0006）。 */
+    private final java.util.Set<Integer> accessorySends = new java.util.HashSet<Integer>();
     /** 车机给没给这份清单（没给就不设门禁）。 */
     private boolean acceptsListDeclared;
     /** 车机的定位组件里有没有 GPGSV（决定 0xFFFA 要不要带 param 3）。 */
@@ -123,7 +157,12 @@ public final class Iap2SenderSession {
         this.engine = new Iap2LinkEngine(linkTransport, new Iap2LinkEngine.Listener() {
             @Override public void onState(Iap2LinkEngine.State s) {
                 linkListener.onState(s);
+                // ⚠️ 链路层被拆（车机发 RST / 蓝牙断开 / 写失败）时必须把会话状态一起落下来。
+                //    以前只处理 NORMAL：RST 之后 Iap2SenderSession.state() 仍停在 READY，
+                //    上层据此以为「还连着」，于是不重连、也不再发任何东西 —— 现场表现就是
+                //    「画面停住、日志里最后一句是收到某条消息」。（假车机测试台一次跑出来的）
                 if (s == Iap2LinkEngine.State.NORMAL) onLinkUp();
+                else if (s == Iap2LinkEngine.State.CLOSED) setState(State.CLOSED);
             }
             @Override public void onMessage(Iap2Csm.Message m) {
                 linkListener.onMessage(m);
@@ -182,24 +221,21 @@ public final class Iap2SenderSession {
         //    0x4E0D（WirelessCarPlayUpdate）必须**第一个**发：它声明「我是无线 CarPlay 设备」，
         //    车机要等这条才启用无线 CarPlay 路径；以前把它排在最后，严格的车机可能
         //    在收到它之前就已经放弃无线 CarPlay（现场「车机一点反应也没有」）。
-        if (allowed(Iap2Ids.WIRELESS_CARPLAY_UPDATE)) {
-            engine.sendCsm(Iap2Ids.WIRELESS_CARPLAY_UPDATE, Iap2Csm.u8(0, 1));
-        }
-        if (allowed(Iap2Ids.DEVICE_LANGUAGE_UPDATE)) {
-            engine.sendCsm(Iap2Ids.DEVICE_LANGUAGE_UPDATE, Iap2Csm.paramString(0, "en"));
-        }
-        if (allowed(Iap2Ids.DEVICE_INFORMATION_UPDATE)) {
-            engine.sendCsm(Iap2Ids.DEVICE_INFORMATION_UPDATE, Iap2Csm.paramString(0, deviceName));
-        }
-        if (allowed(Iap2Ids.DEVICE_TIME_UPDATE)) {
-            engine.sendCsm(Iap2Ids.DEVICE_TIME_UPDATE, Iap2Csm.concat(
-                    Iap2Csm.paramUInt(0, epochSeconds, 8),
-                    Iap2Csm.paramUInt(1, 0, 2),
-                    Iap2Csm.u8(2, 0)));
-        }
-        if (allowed(Iap2Ids.DEVICE_UUID_UPDATE)) {
-            engine.sendCsm(Iap2Ids.DEVICE_UUID_UPDATE, Iap2Csm.paramString(0, deviceUuid()));
-        }
+        // ⚠️ 这五条**不按车机的可收清单过滤**：真 iPhone 无条件发，
+        //    而车机的清单常常不完整（奥迪 MIB3 3315 的可收清单只有 5 项，
+        //    0x4E0D/0x4E0B/0x4E0E 都不在里面，但车机逐条 ACK 到位 ——
+        //    mcarplay 同日真车日志）。以前按清单门禁，没声明就被跳过：
+        //    车机收到的是「半个设备」，严格的车机就此不再往下走。
+        engine.sendCsm(Iap2Ids.WIRELESS_CARPLAY_UPDATE, Iap2Csm.u8(0, 1));
+        engine.sendCsm(Iap2Ids.DEVICE_LANGUAGE_UPDATE, Iap2Csm.paramString(0, deviceLanguage()));
+        engine.sendCsm(Iap2Ids.DEVICE_INFORMATION_UPDATE, Iap2Csm.paramString(0, deviceName));
+        engine.sendCsm(Iap2Ids.DEVICE_TIME_UPDATE, Iap2Csm.concat(
+                Iap2Csm.paramUInt(0, epochSeconds, 8),
+                // 真 iPhone 报的是**本地时区偏移**（分钟，带符号的 u16 补码），
+                // 不是 0。以前写死 0 = 告诉车机「本机在 UTC」。
+                Iap2Csm.paramUInt(1, timezoneOffsetMinutes() & 0xFFFF, 2),
+                Iap2Csm.u8(2, 0)));
+        engine.sendCsm(Iap2Ids.DEVICE_UUID_UPDATE, Iap2Csm.paramString(0, deviceUuid()));
         // 0x4E0E：车机即使没声明也会记一条日志后忽略，不致命，所以照发。
         engine.sendCsm(Iap2Ids.DEVICE_TRANSPORT_IDENTIFIER, Iap2Csm.concat(
                 Iap2Csm.paramString(0, deviceMac),
@@ -225,7 +261,10 @@ public final class Iap2SenderSession {
      * {@code usbTransportIdentifier=0000815000190xxxxxxxxxxx}），我们用 MAC 派生一个同形状的。
      */
     private String usbTransportIdentifier() {
-        StringBuilder s = new StringBuilder();
+        // 真 iPhone 的 usbTransportIdentifier 形如 0000815000190xxxxxxx：
+        // 前缀 0000815 是 Apple 的板型前缀，后面跟设备唯一号。以前直接用 MAC 派生，
+        // 形状对（24 位大写十六进制）但前缀不像 Apple，个别车机会拿它做二次校验。
+        StringBuilder s = new StringBuilder("000081500");
         for (char c : deviceMac.toCharArray()) {
             if (Character.digit(c, 16) >= 0) s.append(Character.toUpperCase(c));
         }
@@ -237,6 +276,37 @@ public final class Iap2SenderSession {
     private boolean allowed(int messageId) {
         if (!acceptsListDeclared) return true;      // 车机没给清单 → 都发
         return accessoryAccepts.contains(messageId);
+    }
+
+    /** 报给车机的语言：跟系统走（真 iPhone 报自己的 locale），拿不到退回 en。 */
+    private static String deviceLanguage() {
+        try {
+            java.util.Locale l = java.util.Locale.getDefault();
+            String lang = l.getLanguage();
+            if (lang == null || lang.isEmpty()) return "en";
+            String country = l.getCountry();
+            return country == null || country.isEmpty() ? lang : lang + "-" + country;
+        } catch (Throwable t) {
+            return "en";
+        }
+    }
+
+    /** 本地时区相对 UTC 的偏移（分钟）。东八区 = +480。 */
+    private static int timezoneOffsetMinutes() {
+        try {
+            return java.util.TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 60000;
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
+    /** 两份清单里是否声明了任一 EA 消息 —— 用来把「走 EA 通道的车机」和「纯 CarPlay 车机」分开。 */
+    private boolean declaresAnyEaMessage() {
+        int[] ea = {Iap2Ids.EA_OPEN_SESSION, Iap2Ids.EA_CLOSE_SESSION, Iap2Ids.EA_SESSION_STATUS};
+        for (int id : ea) {
+            if (accessoryAccepts.contains(id) || accessorySends.contains(id)) return true;
+        }
+        return false;
     }
     /** 由真实蓝牙 MAC 派生的稳定设备 UUID（CarDeck 同款）。 */
     private String deviceUuid() {
@@ -252,6 +322,11 @@ public final class Iap2SenderSession {
      * <p>外层是一个参数组：id=1，值里是「标志(0)=1」和「蓝牙 MAC(1)」。
      */
     private void sendCarPlayAvailability() {
+        if (carPlayAvailabilitySent) {
+            log("0x4300 本轮已发过，跳过重复请求");
+            return;
+        }
+        carPlayAvailabilitySent = true;
         sendDeviceGreeting();
         byte[] body = Iap2Csm.group(1,
                 Iap2Csm.u8(0, 1),
@@ -266,6 +341,10 @@ public final class Iap2SenderSession {
     public void onWifiConfigTimeout() {
         if (state != State.REQUESTING_WIFI) return;
         log("0x5703 超时未到，改走 0x4300/0x4301（AP 信息由车机在 0x4301 里给）");
+        // 车机源码（BluetoothSettingFragment.selectCarplay）里有一条硬条件：
+        //   点「CarPlay」时它先查 WifiApMgr.isApEnable()，热点没开就只弹一句提示、
+        //   **根本不发起连接** —— 我们这边看到的就是「一直等 0x5703 等不到」。
+        log("   ↳ 如果车机上点 CarPlay 只弹了一句提示：请先打开车机的「车载热点 / Wi-Fi 热点」再点一次");
         setState(State.STARTING_SESSION);
         sendCarPlayAvailability();
     }
@@ -282,13 +361,28 @@ public final class Iap2SenderSession {
 
     public void start() { engine.start(); }
     public void onBytes(byte[] data) { engine.onBytes(data); }
-    public void close() { engine.close(); setState(State.CLOSED); }
+    public void close() {
+        try { authTimer.shutdownNow(); } catch (Throwable ignored) { } engine.close(); setState(State.CLOSED); }
 
     // ================================================================== 链路起来后
 
     private void onLinkUp() {
         setState(State.IDENTIFYING);
         engine.sendCsm(Iap2Ids.START_IDENTIFICATION, new byte[0]);
+        // 识别看门狗：车机 15s 内不回 0x1D01，说明链路通了但它不说话（或说了我们解析不了）。
+        // 以前这种情况会一直停在 IDENTIFYING，界面看着像卡住。
+        try {
+            authTimer.schedule(new Runnable() {
+                @Override public void run() {
+                    if (state == State.IDENTIFYING) {
+                        log("⚠ 发出 0x1D00 后 15s 没收到 0x1D01 —— 车机没回应识别");
+                        listener.onLog("车机没有任何识别回应：确认车机已打开 CarPlay 且选中本机");
+                        setState(State.ERROR);
+                    }
+                }
+            }, 15, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (Throwable ignored) {
+        }
         log("发送 StartIdentification (0x1D00)");
     }
 
@@ -475,6 +569,14 @@ public final class Iap2SenderSession {
             }
             log("  车机 want-list：" + describeMessageIds(received));
         }
+        // 车机声明「它会发哪些消息」（id 0x0006，u16[]）。它决定 0x4300 该不该提前发。
+        if (sent != null) {
+            accessorySends.clear();
+            byte[] v = sent.value;
+            for (int i = 0; i + 1 < v.length; i += 2) {
+                accessorySends.add(((v[i] & 0xFF) << 8) | (v[i + 1] & 0xFF));
+            }
+        }
         // 车机的定位组件（id 0x0016）里声明了哪些定位句子。
         Iap2Csm.Param loc = Iap2Csm.find(params, 0x0016);
         if (loc != null) {
@@ -534,11 +636,36 @@ public final class Iap2SenderSession {
     private void onAuthCertificate(Iap2Csm.Message m) {
         setState(State.AUTHENTICATING);
         // 解析证书，提取 RSA 公钥（严格模式验签用）
-        if (peerRsaKey == null && !m.params().isEmpty()) {
+        if ((peerRsaKey == null && peerEcKey == null) && !m.params().isEmpty()) {
             Iap2Csm.Param cert = m.params().get(0);
             peerRsaKey = MfiCrypto.parseCertificate(cert.value);
+            if (peerRsaKey == null) {
+                // 很多车机（DiPlay AuthV3、Apple 近年 MFi）用 ECC，以前这里只认 RSA，
+                // 于是永远「未解析出公钥」→ 严格模式根本没法验签。
+                peerEcKey = MfiCrypto.parseEcPublicKey(cert.value);
+            }
+            peerCertApple = MfiCrypto.looksAppleIssued(cert.value);
+            long[] valid = MfiCrypto.certValidity(cert.value);
+            if (valid != null) {
+                long now = System.currentTimeMillis();
+                boolean expired = now > valid[1];
+                boolean notYet = now < valid[0];
+                log("证书有效期：" + fmtTime(valid[0]) + " ~ " + fmtTime(valid[1])
+                        + (expired ? " · 已过期" : notYet ? " · 尚未生效" : " · 有效"));
+                if (expired && verifyMfiSignature) {
+                    log("严格模式：证书已过期，回 0xAA04");
+                    engine.sendCsm(Iap2Ids.AUTH_FAILED, new byte[0]);
+                    setState(State.ERROR);
+                    return;
+                }
+            } else {
+                log("证书里没解析出有效期（裸公钥/占位证书的可能性大）");
+            }
             log("收到 MFi 证书 " + cert.value.length + "B → "
-                    + (peerRsaKey == null ? "（未解析出 RSA 公钥，可能是 EC 证书）" : peerRsaKey.toString()));
+                    + (peerRsaKey != null ? peerRsaKey.toString()
+                       : peerEcKey != null ? ("EC-" + peerEcKey.getAlgorithm())
+                       : "未解析出公钥")
+                    + (peerCertApple ? " · Apple OID 体系" : " · 非 Apple OID（自制/占位证书）"));
         }
         if (!challengeSent) {
             sendNextChallenge();
@@ -569,6 +696,16 @@ public final class Iap2SenderSession {
         engine.sendCsm(Iap2Ids.AUTH_CHALLENGE_RESPONSE, Iap2Csm.param(0, challenge));
         challengeSent = true;
         challengeSentAtMs = System.currentTimeMillis();
+        final int token = ++challengeToken;
+        // 内建超时：到点还停在同一个 token 就自己回退下一档（上层 watchdog 没调也不会卡死）
+        try {
+            authTimer.schedule(new Runnable() {
+                @Override public void run() {
+                    if (challengeSent && token == challengeToken) retryChallenge();
+                }
+            }, CHALLENGE_TIMEOUT_MS[idx], java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (Throwable ignored) {
+        }
         log("发送 MFi 挑战 " + challenge.length + "B（等待最多 " + CHALLENGE_TIMEOUT_MS[idx] + "ms）");
     }
 
@@ -585,6 +722,28 @@ public final class Iap2SenderSession {
 
     private void onAuthResponse(Iap2Csm.Message m) {
         boolean accepted = true;
+        Iap2Csm.Param sig0 = m.params().isEmpty() ? null : m.params().get(0);
+        if (sig0 != null) {
+            // 重放检测：同一个挑战收到一份一模一样的签名 = 车机在回放
+            boolean replay = lastResponseSig != null && lastResponseFor == lastChallenge
+                    && java.util.Arrays.equals(sig0.value, lastResponseSig);
+            if (replay) {
+                log("⚠ 0xAA03 与上一份完全相同（挑战未变）→ 判定为重放");
+                if (verifyMfiSignature) {
+                    engine.sendCsm(Iap2Ids.AUTH_FAILED, new byte[0]);
+                    setState(State.ERROR);
+                    listener.onLog("MFi 认证失败：车机回放了旧签名");
+                    return;
+                }
+            }
+            lastResponseSig = sig0.value.clone();
+            lastResponseFor = lastChallenge;
+            // 形状：RSA 必须等于模长字节；ECDSA 必须是 DER SEQUENCE 或 64B raw
+            boolean shapeOk = MfiCrypto.signatureShapeOk(sig0.value, peerRsaKey, peerEcKey);
+            if (!shapeOk) {
+                log("⚠ 签名形状不符（" + sig0.value.length + "B）—— 对面可能没按 MFi 签");
+            }
+        }
         if (verifyMfiSignature) {
             Iap2Csm.Param sig = m.params().isEmpty() ? null : m.params().get(0);
             accepted = sig != null && peerRsaKey != null && lastChallenge != null
@@ -593,7 +752,23 @@ public final class Iap2SenderSession {
                     + "（签名 " + (sig == null ? "?" : sig.value.length) + "B，证书 "
                     + (peerRsaKey == null ? "未解析" : peerRsaKey.toString()) + "）");
         } else {
-            log("收到 MFi AuthResponse，发送 AuthSucceeded（宽松模式不验签）");
+            // 宽松模式也要「探测性验签」：结果只进日志，不影响放行。
+            // 现场靠这一行就能区分「车机真的签了」和「随便回了个包」。
+            Iap2Csm.Param sig = m.params().isEmpty() ? null : m.params().get(0);
+            boolean probe = false;
+            String how = "无公钥";
+            if (sig != null && lastChallenge != null) {
+                if (peerRsaKey != null) {
+                    probe = MfiCrypto.verifySignature(lastChallenge, sig.value, peerRsaKey);
+                    how = peerRsaKey.toString();
+                } else if (peerEcKey != null) {
+                    probe = MfiCrypto.verifyEcSignature(lastChallenge, sig.value, peerEcKey);
+                    how = "EC";
+                }
+            }
+            log("收到 MFi AuthResponse（签名 " + (sig == null ? "?" : sig.value.length) + "B）"
+                    + " · 探测验签=" + (probe ? "通过" : "不通过") + "（" + how + "）"
+                    + " · 宽松模式仍然放行");
         }
         if (!accepted) {
             engine.sendCsm(Iap2Ids.AUTH_FAILED, new byte[0]);   // 0xAA04
@@ -610,11 +785,41 @@ public final class Iap2SenderSession {
         setState(State.REQUESTING_WIFI);
         engine.sendCsm(Iap2Ids.REQUEST_ACCESSORY_WIFI_CONFIGURATION, new byte[0]);
         log("发送 RequestAccessoryWiFiConfiguration (0x5702)");
+        // 认证后看门狗：真车机拿到 0xAA05 会马上给 0x5703 或（新势力形态）直接回 0x4301。
+        // 两边都没有说明它在认证后反悔了 —— 以前这种会话会静默停住，看不出原因。
+        try {
+            authTimer.schedule(new Runnable() {
+                @Override public void run() {
+                    if (!wifiConfigSeen && !endpointSeen) {
+                        log("⚠ 认证后 12s 内既没收到 0x5703 也没收到 0x4301 —— 车机在认证后停了");
+                        listener.onLog("认证已通过，但车机既没给热点凭据也没发起 CarPlay（可能被车机侧策略拦下）");
+                    }
+                }
+            }, 12, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (Throwable ignored) {
+        }
+
+        // 正向能力判据：车机声明「能收 0x4300、会发 0x4301」，且完全不参与 0x57xx、
+        // 也不声明任何 EA 消息 —— 这种车机不会回 0x5703，等超时兜底时 CarPlay 窗口
+        // 往往已经关了（mcarplay 在 BMW iD9 / 上汽 AH4EM 形态上实测：按「清单没声明
+        // 就跳过」的那一版 4 轮会话一次都没真正发出 0x4300）。
+        // 只影响时序：0x4300 本来每轮必发，这里只是提前到凭据窗口内，且仍受「至多一次」闸门。
+        boolean earlyCarPlayAvailability =
+                accessoryAccepts.contains(Iap2Ids.CARPLAY_AVAILABILITY)
+                        && accessorySends.contains(Iap2Ids.CARPLAY_START_SESSION)
+                        && !accessoryAccepts.contains(Iap2Ids.REQUEST_ACCESSORY_WIFI_CONFIGURATION)
+                        && !accessorySends.contains(Iap2Ids.ACCESSORY_WIFI_CONFIGURATION)
+                        && !declaresAnyEaMessage();
+        if (earlyCarPlayAvailability) {
+            log("车机画像：只收 0x4300 / 只发 0x4301、不参与 0x57xx → 立即发 0x4300，不等 0x5703");
+            sendCarPlayAvailability();
+        }
     }
 
     // ---------------------------------------------------------------- WiFi 凭据
 
     private void onWifiConfiguration(Iap2Csm.Message m) {
+        wifiConfigSeen = true;
         List<Iap2Csm.Param> params = m.params();
         // 自适应解析：不写死某台车，按「多布局探测 + 合理性校验」择优（真 iPhone 策略）。
         WifiConfig cfg = parseWifi(params);
@@ -675,6 +880,7 @@ public final class Iap2SenderSession {
     // ---------------------------------------------------------------- 会话端点
 
     private void onCarPlayStartSession(Iap2Csm.Message m) {
+        endpointSeen = true;
         List<Iap2Csm.Param> params = m.params();
         log("收到 CarPlayStartSession (0x4301)，" + params.size() + " 个参数");
         // 先把每个参数原样打出来，便于对照真实布局（不同车机不一致）
@@ -745,8 +951,17 @@ public final class Iap2SenderSession {
 
     private void setState(State s) {
         if (state == s) return;
+        // 关闭是终态：链路已断（RST/蓝牙掉线）之后，别再被后续消息推回 READY。
+        if (state == State.CLOSED && s != State.CLOSED) return;
         state = s;
         listener.onState(s);
+    }
+
+    /** 证书有效期用：epoch ms → yyyy-MM-dd HH:mm（UTC）。 */
+    private static String fmtTime(long ms) {
+        java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US);
+        f.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+        return f.format(new java.util.Date(ms)) + "Z";
     }
 
     private void log(String msg) {

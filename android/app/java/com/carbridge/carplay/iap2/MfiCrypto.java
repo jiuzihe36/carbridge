@@ -44,7 +44,7 @@ public final class MfiCrypto {
         List<RsaKey> found = new ArrayList<RsaKey>();
         try {
             collectRsaKeys(der, 0, der.length, found, 0);
-        } catch (Throwable ignored) {
+        } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("MfiCrypto", t);
         }
         RsaKey best = null;
         for (RsaKey k : found) {
@@ -100,7 +100,7 @@ public final class MfiCrypto {
             BigInteger e = new BigInteger(1, der, el.valueStart, eLen);
             if (el.valueEnd != end) return null;   // 必须恰好两个 INTEGER
             return new RsaKey(n, e);
-        } catch (Throwable ignored) {
+        } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("MfiCrypto", t);
             return null;
         }
     }
@@ -131,6 +131,122 @@ public final class MfiCrypto {
         }
         if (p + len > der.length) return null;
         return new Len(p, p + len);
+    }
+
+    // ================================================================== EC（P-256）
+
+    /** 从证书里取 EC 公钥（SubjectPublicKeyInfo）。很多车机（含 Apple MFi 近年）用的是 ECC。 */
+    public static java.security.PublicKey parseEcPublicKey(byte[] der) {
+        if (der == null || der.length < 32) return null;
+        // id-ecPublicKey OID: 1.2.840.10045.2.1 → 06 07 2A 86 48 CE 3D 02 01
+        byte[] oid = {0x06, 0x07, 0x2A, (byte) 0x86, 0x48, (byte) 0xCE, 0x3D, 0x02, 0x01};
+        for (int i = 0; i + oid.length < der.length; i++) {
+            if (der[i] != oid[0]) continue;
+            boolean hit = true;
+            for (int k = 0; k < oid.length; k++) {
+                if (der[i + k] != oid[k]) { hit = false; break; }
+            }
+            if (!hit) continue;
+            // SPKI 从包住这个 OID 的 SEQUENCE(0x30) 开始：向前找最近的 0x30，且其长度覆盖 OID
+            for (int back = i - 1; back >= 0 && back > i - 8; back--) {
+                if ((der[back] & 0xFF) != 0x30) continue;
+                Len len = readLength(der, back + 1);
+                if (len == null || len.valueEnd <= i || len.valueEnd > der.length) continue;
+                try {
+                    byte[] spki = new byte[len.valueEnd - back];
+                    System.arraycopy(der, back, spki, 0, spki.length);
+                    return java.security.KeyFactory.getInstance("EC")
+                            .generatePublic(new java.security.spec.X509EncodedKeySpec(spki));
+                } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("MfiCrypto", t);
+                    // 继续向前找
+                }
+            }
+        }
+        return null;
+    }
+
+    /** ECDSA 验签（MFi ECC 身份用 SHA-256；老一点的用 SHA-1，两个都试）。 */
+    public static boolean verifyEcSignature(byte[] challenge, byte[] signature, java.security.PublicKey key) {
+        if (challenge == null || signature == null || key == null) return false;
+        for (String alg : new String[]{"SHA256withECDSA", "SHA1withECDSA"}) {
+            try {
+                java.security.Signature v = java.security.Signature.getInstance(alg);
+                v.initVerify(key);
+                v.update(challenge);
+                if (v.verify(signature)) return true;
+            } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("MfiCrypto", t);
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 取证书有效期（notBefore, notAfter，epoch ms）。找不到返回 null。
+     * 不追求完整 ASN.1：直接扫前两个 UTCTime(0x17) / GeneralizedTime(0x18)，
+     * 顺序就是 notBefore、notAfter —— 对「证书是否过期/是不是占位证书」够用。
+     */
+    public static long[] certValidity(byte[] der) {
+        if (der == null) return null;
+        long[] out = new long[2];
+        int got = 0;
+        for (int i = 0; i + 2 < der.length && got < 2; i++) {
+            int tag = der[i] & 0xFF;
+            if (tag != 0x17 && tag != 0x18) continue;
+            Len len = readLength(der, i + 1);
+            if (len == null) continue;
+            String s = new String(der, len.valueStart, len.valueEnd - len.valueStart,
+                    java.nio.charset.StandardCharsets.US_ASCII);
+            long ms = parseAsn1Time(s, tag == 0x18);
+            if (ms > 0) out[got++] = ms;
+            i = len.valueEnd - 1;
+        }
+        return got == 2 ? out : null;
+    }
+
+    private static long parseAsn1Time(String s, boolean generalized) {
+        try {
+            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat(
+                    generalized ? "yyyyMMddHHmmss'Z'" : "yyMMddHHmmss'Z'", java.util.Locale.US);
+            f.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+            if (!generalized && s.length() == 13) {
+                // UTCTime 的两位年份：<50 → 20xx，≥50 → 19xx（RFC 5280）
+                int yy = Integer.parseInt(s.substring(0, 2));
+                s = (yy < 50 ? "20" : "19") + s;
+                f = new java.text.SimpleDateFormat("yyyyMMddHHmmss'Z'", java.util.Locale.US);
+                f.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+            }
+            return f.parse(s).getTime();
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
+
+    /**
+     * 签名形状校验：MFi 里 RSA 签名是固定长度（模长字节），ECDSA 是 DER SEQUENCE。
+     * 形状不对说明「对面根本没按 MFi 签」，严格模式该直接拒。
+     */
+    public static boolean signatureShapeOk(byte[] sig, RsaKey rsa, java.security.PublicKey ec) {
+        if (sig == null || sig.length == 0) return false;
+        if (rsa != null) return sig.length == (rsa.modulus.bitLength() + 7) / 8;
+        if (ec != null) {
+            if (sig.length == 64) return true;                       // raw r||s
+            return (sig[0] & 0xFF) == 0x30 && sig.length >= 8 && sig.length <= 80;  // DER
+        }
+        return false;
+    }
+
+    /** 证书里有没有 Apple 的 OID 弧（1.2.840.113635 = 2A 86 48 86 F7 63）→ 是否 Apple 签发体系。 */
+    public static boolean looksAppleIssued(byte[] der) {
+        if (der == null) return false;
+        byte[] arc = {0x2A, (byte) 0x86, 0x48, (byte) 0x86, (byte) 0xF7, 0x63};
+        for (int i = 0; i + arc.length <= der.length; i++) {
+            boolean hit = true;
+            for (int k = 0; k < arc.length; k++) {
+                if (der[i + k] != arc[k]) { hit = false; break; }
+            }
+            if (hit) return true;
+        }
+        return false;
     }
 
     // ================================================================== RSA 验签
@@ -164,7 +280,7 @@ public final class MfiCrypto {
             System.arraycopy(em, em.length - 20, digest, 0, 20);
             byte[] expected = MessageDigest.getInstance("SHA-1").digest(challenge);
             return MessageDigest.isEqual(digest, expected);
-        } catch (Throwable ignored) {
+        } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("MfiCrypto", t);
             return false;
         }
     }

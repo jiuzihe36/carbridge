@@ -1,6 +1,6 @@
 package com.carbridge.carplay.bridge;
 
-import com.carbridge.app.HuProto;
+import com.carbridge.carplay.proto.HuProto;
 
 /**
  * CarPlay 的 HID 硬键 → CarLife 的小车机键码。

@@ -38,6 +38,47 @@ public final class Iap2AccessorySession {
         public int wifiChannel = 6;               // 0x5703 信道
         public String phoneIp = "192.168.1.2";    // ctrl-int 邀请要反连的手机 IP
         public int ctrlIntPort = 7100;            // 手机 CtrlIntServer 端口
+
+        // —— 以下五项决定「假车机像不像你那台车」，都可以用 carprofile.json 覆盖 ——
+        public String model  = "HeadUnit";        // 0x1D01 param1（车机型号，真车例：Desay SV）
+        public String serial = "0000000000000";   // 0x1D01 param3
+        public String maker  = "VENDOR";          // 0x1D01 param2
+        public String fw     = "1.1.0";           // 0x1D01 param4
+        /** 车机能收哪些手机消息（0x1D01 param7）。真车抓包里照抄。 */
+        public int[] accRecv = {0x1D00, 0x1D01, 0x1D02, 0xAA00, 0xAA02, 0xAA05, 0x5702, 0x4300,
+                0x4E0C, 0x4E09, 0x4E0A, 0x4E0B, 0x4E0D, 0x4E0E, 0xFFFA, 0x4155, 0x4E04};
+        /** 车机会发哪些消息（0x1D01 param6）。 */
+        /** MFi 挑战长度（真车方向：车机发挑战、手机回签名）。Chery 记录是 32，本车未实测。 */
+        public int mfiChallengeLen = 32;
+        public int[] accSend = {0x1D00, 0x1D01, 0xAA01, 0xAA03, 0x5703, 0x4301, 0xAE00, 0x5000,
+                0x4C00, 0x4C03, 0x4E03, 0x4154, 0x6800};
+
+        /** 用 carprofile.json 覆盖（字段缺哪个就用默认，不要求全填）。 */
+        public void applyJson(org.json.JSONObject o) {
+            if (o == null) return;
+            model  = o.optString("model",  model);
+            serial = o.optString("serial", serial);
+            maker  = o.optString("maker",  maker);
+            fw     = o.optString("fw",     fw);
+            mfiChallengeLen = o.optInt("mfiChallengeLen", mfiChallengeLen);
+            deviceId = o.optString("deviceId", deviceId);
+            carIp    = o.optString("carIp",    carIp);
+            apPort   = o.optInt("apPort",   apPort);
+            ssid     = o.optString("ssid",     ssid);
+            wifiPass = o.optString("wifiPass", wifiPass);
+            org.json.JSONArray recv = o.optJSONArray("accRecv");
+            if (recv != null && recv.length() > 0) {
+                int[] a = new int[recv.length()];
+                for (int i = 0; i < a.length; i++) a[i] = recv.optInt(i);
+                accRecv = a;
+            }
+            org.json.JSONArray send = o.optJSONArray("accSend");
+            if (send != null && send.length() > 0) {
+                int[] a = new int[send.length()];
+                for (int i = 0; i < a.length; i++) a[i] = send.optInt(i);
+                accSend = a;
+            }
+        }
     }
 
     // ------------------------------------------------------------------ 常量
@@ -91,6 +132,7 @@ public final class Iap2AccessorySession {
 
     // 状态（防重复）
     private boolean identified;
+    private boolean mfiChallengeSent;
     private boolean certSent;
     private boolean sent5703;
     private boolean sent4301;
@@ -326,7 +368,23 @@ public final class Iap2AccessorySession {
                 certSent = true;
                 txCsm(MSG_AUTH_CERT, Iap2Csm.param(0, repeat((byte) 0x04, 64)),
                         "0xAA01 占位证书 64B");
+                // ⚠️ 真车（CHERY/Tiggo，mcarplay 艾瑞泽 8 记录）是**车机先发 32 字节挑战**，
+                //    手机回 128B 签名，车机再回 0xAA05。以前这里是纯被动回应，方向反了。
+                {
+                    byte[] challenge = new byte[cfg.mfiChallengeLen];
+                    new java.security.SecureRandom().nextBytes(challenge);
+                    txCsm(MSG_AUTH_CHALLENGE, Iap2Csm.param(0, challenge),
+                            "0xAA02 MFi 挑战 " + cfg.mfiChallengeLen + "B");
+                    mfiChallengeSent = true;
+                }
                 break;
+            case MSG_AUTH_RESPONSE: {
+                int slen = ps.isEmpty() ? 0 : ps.get(0).value.length;
+                emit("  < 手机 0xAA03 签名 " + slen + "B");
+                txCsm(MSG_AUTH_SUCCEEDED, new byte[0], "0xAA05 MFi 通过");
+                firePhase("mfi");
+                break;
+            }
             case MSG_AUTH_CHALLENGE: {
                 int clen = ps.isEmpty() ? 0 : ps.get(0).value.length;
                 byte[] sig = new byte[72];
@@ -443,19 +501,18 @@ public final class Iap2AccessorySession {
     private void sendAccessoryIdentification() {
         if (identified) return;
         identified = true;
-        int[] accSend = {0x1D00, 0x1D01, 0xAA01, 0xAA03, 0x5703, 0x4301, 0xAE00, 0x5000,
-                0x4C00, 0x4C03, 0x4E03, 0x4154, 0x6800};
-        int[] accRecv = {0x1D00, 0x1D01, 0x1D02, 0xAA00, 0xAA02, 0xAA05, 0x5702, 0x4300,
-                0x4E0C, 0x4E09, 0x4E0A, 0x4E0B, 0x4E0D, 0x4E0E, 0xFFFA, 0x4155, 0x4E04};
+        // 自报参数全部来自 config（可用 carprofile.json 覆盖成真车那一套 → 1:1）
+        int[] accSend = cfg.accSend;
+        int[] accRecv = cfg.accRecv;
         byte[] body = Iap2Csm.concat(
-                Iap2Csm.paramString(0, "HeadUnit"),
-                Iap2Csm.paramString(1, "HeadUnit"),
-                Iap2Csm.paramString(2, "VENDOR"),
-                Iap2Csm.paramString(3, "0000000000000"),
-                Iap2Csm.paramString(4, "1.1.0"),
+                Iap2Csm.paramString(0, cfg.model),
+                Iap2Csm.paramString(1, cfg.model),
+                Iap2Csm.paramString(2, cfg.maker),
+                Iap2Csm.paramString(3, cfg.serial),
+                Iap2Csm.paramString(4, cfg.fw),
                 Iap2Csm.param(6, idList(accSend)),
                 Iap2Csm.param(7, idList(accRecv)));
-        txCsm(MSG_IDENT_INFO, body, "0x1D01 配件识别（HeadUnit + want-list）");
+        txCsm(MSG_IDENT_INFO, body, "0x1D01 配件识别（" + cfg.model + " + want-list）");
         firePhase("identified");
     }
 
