@@ -494,6 +494,15 @@ public final class SelfTests {
         m.mixMusic(loud, loud.length);
         check(m.clippedSamples() > 0, "超范围时计限幅次数（" + m.clippedSamples() + "）");
 
+        // 长度不是 4 的倍数时：尾部字节必须原样保留（否则车机上会听到「咔」）
+        com.carbridge.carplay.audio.AudioDuckingMixer m3 = new com.carbridge.carplay.audio.AudioDuckingMixer();
+        byte[] odd = new byte[4410 * 4 + 3];
+        for (int i = 0; i < odd.length; i++) odd[i] = (byte) 0x11;
+        byte[] oddOut = m3.mixMusic(odd, odd.length);
+        check(oddOut.length == odd.length, "非 4 倍长度输出仍等长");
+        check(oddOut[odd.length - 3] == 0x11 && oddOut[odd.length - 1] == 0x11,
+                "尾部 3 个字节原样保留（不变成 0）");
+
         // 独立取出提示音（音乐静止时）
         com.carbridge.carplay.audio.AudioDuckingMixer m2 = new com.carbridge.carplay.audio.AudioDuckingMixer();
         m2.submitPrompt(loud);

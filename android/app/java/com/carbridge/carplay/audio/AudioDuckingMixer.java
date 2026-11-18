@@ -94,6 +94,11 @@ public final class AudioDuckingMixer {
             writeShort(out, i * 4, clamp(l));
             writeShort(out, i * 4 + 2, clamp(r));
         }
+        // 尾部不足一帧的字节原样带过去：丢掉的会在车机上变成一声「咔」
+        int tail = len - frames * 4;
+        if (tail > 0) {
+            System.arraycopy(musicPcm, frames * 4, out, frames * 4, tail);
+        }
         if (consumed > 0) {
             System.arraycopy(prompt, consumed * 2, prompt, 0, (promptFrames - consumed) * 2);
             promptFrames -= consumed;
