@@ -1357,7 +1357,18 @@ public final class HuClient {
                     pushStreamSize();
                     notifyEncoderInfo();
                 }
-                boolean fpsOk = gotFps <= 0 || gotFps == fps;          // 没给帧率字段就放行
+                // 帧率判据：**等于或高于**目标都算合格。
+                //
+                // 以前是严格相等（gotFps == fps）。用户在 Car+ 里把帧率设成 60 之后，
+                // 我们请求 30 就会判「不合格」→ 发 0x1800C 主动把它**降回 30**
+                // —— 正好把用户想要的高帧率掐掉。实际能给的比我们要的多，是好事。
+                boolean fpsOk = gotFps <= 0 || gotFps >= fps;
+                if (fpsOk && gotFps > fps) {
+                    int capped = DisplayGeometry.clampFps(gotFps);
+                    log("Car+ 实际 @" + gotFps + " 高于目标 @" + fps + " → 按实际 @" + capped + " 走（不降档）");
+                    fps = capped;
+                    learnedFps = capped;
+                }
                 // ⚠️ 这里以前有一道「ENC_INIT 应答延迟 ≥215ms 才放行」的门。
                 // 那是**拿定时去猜结局**（撞库）：延迟只是「有没有真干活」的代理指标，
                 // 既不是对端给出的事件，也无法据此优化延时 —— 你说的问题正在这里。已删除。
