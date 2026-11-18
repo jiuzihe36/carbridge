@@ -105,7 +105,7 @@ public final class HuClient {
      */
     private volatile int learnedFps;
     /** 首次协商的默认目标帧率。 */
-    private static final int DEFAULT_TARGET_FPS = 30;
+    private static final int DEFAULT_TARGET_FPS = 60;
     /** 手机**实际**的编码尺寸/帧率（来自 MD_VIDEO_ENCODER_INIT）；0 = 还没拿到。 */
     private volatile int encW, encH, encFps;
     /** 自动跟随车机 /info 的画布和帧率（UI 可关；关掉就完全用手动参数）。 */

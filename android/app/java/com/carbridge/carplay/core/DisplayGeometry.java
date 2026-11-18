@@ -6,7 +6,7 @@ package com.carbridge.carplay.core;
 public final class DisplayGeometry {
 
     public static final int MAX_LONG_EDGE = 1920;
-    public static final int MAX_FPS = 60;
+    public static final int MAX_FPS = 120;
     public static final int MIN_FPS = 20;
     public static final int MIN_DIM = 8;
 

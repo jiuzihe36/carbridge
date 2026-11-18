@@ -16,7 +16,7 @@ public final class QualityPrefs {
     public static final int MAX_DIM = 3840;
 
     /** 可选帧率档位：CarLife 内容 30 帧足够，24 是低端车机的保底。 */
-    public static final int[] FPS_OPTIONS = {20, 24, 30, 60};
+    public static final int[] FPS_OPTIONS = {20, 24, 30, 60, 90, 120};
     public static final int DEF_FPS_INDEX = 2;   // → 30
 
     private QualityPrefs() {

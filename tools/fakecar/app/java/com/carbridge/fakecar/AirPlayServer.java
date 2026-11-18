@@ -422,7 +422,7 @@ public final class AirPlayServer {
                 "widthPixels", 1920L,
                 "heightPixels", 720L,
                 "uuid", "00000000-0000-0000-0000-000000000001",
-                "maxFPS", 30L);
+                "maxFPS", 120L);
         Map<String, Object> audioFmt = map(
                 "type", 100L,
                 "audioType", "media",

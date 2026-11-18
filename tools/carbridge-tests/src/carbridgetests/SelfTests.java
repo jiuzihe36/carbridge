@@ -55,7 +55,7 @@ public final class SelfTests {
         // 帧率夹取：低于下限抬到下限，高于上限压到上限，非法给默认
         int min = DisplayGeometry.clampFps(1);
         check(min >= 20 && min <= 60, "1fps 被夹进合法区间（实际 " + min + "）");
-        check(DisplayGeometry.clampFps(1000) <= 60, "1000fps 被压到上限");
+        check(DisplayGeometry.clampFps(1000) <= 120, "1000fps 被压到上限（120）");
         check(DisplayGeometry.clampFps(0) == 30, "0 → 默认 30");
         check(DisplayGeometry.clampFps(-5) == 30, "负数 → 默认 30");
     }
@@ -143,7 +143,7 @@ public final class SelfTests {
                 AdaptiveResolution.suggest(2560, 1080, 70, 1920, 720, 60, 60.0, 20);
         check(big != null && Math.max(big.width, big.height) <= DisplayGeometry.MAX_LONG_EDGE,
                 "2560 宽画布长边被压到 1920 内");
-        check(big != null && big.fps == 60, "70fps 画布 fps 被夹到 60");
+        check(big != null && big.fps == 70, "70fps 画布允许通过（上限已放开到 120）");
 
         // 没有有效采样就不猜
         AdaptiveResolution.Suggestion none =
