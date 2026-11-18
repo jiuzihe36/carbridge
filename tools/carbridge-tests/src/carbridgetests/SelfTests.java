@@ -40,6 +40,7 @@ public final class SelfTests {
         ducking();
         wifiConfig();
         cryptoVectors();
+        airPlayInfo();
 
         System.out.println();
         System.out.println("通过 " + passed + " / 失败 " + failed);
@@ -547,6 +548,93 @@ public final class SelfTests {
         check(com.carbridge.carplay.iap2.WifiConfigParser.isValidChannel(165), "165 信道合法");
         check(!com.carbridge.carplay.iap2.WifiConfigParser.isValidChannel(15), "15 信道非法");
         check(!com.carbridge.carplay.iap2.WifiConfigParser.isValidChannel(0), "0 信道非法");
+    }
+
+    // ---------------------------------------------------------------- /info 解析
+
+    /**
+     * 车机 `/info` 的类型宽容解析。
+     *
+     * <p>各家车机这里千奇百怪：数字可能是 Long（bplist 整数）、也可能是字符串
+     * `"1920"` / `"0x780"`；HID 的 uuid 在奥迪是字符串、在 DiPlay 是整数。
+     * 解析歪了就是「画布不对/触摸偏移」，而现象看起来像「车机兼容性差」。
+     */
+    private static void airPlayInfo() {
+        section("AirPlayInfo（车机 /info 解析）");
+
+        java.util.Map<String, Object> root = new java.util.LinkedHashMap<String, Object>();
+        java.util.List<Object> displays = new java.util.ArrayList<Object>();
+        java.util.Map<String, Object> d0 = new java.util.LinkedHashMap<String, Object>();
+        d0.put("widthPixels", Long.valueOf(1920));
+        d0.put("heightPixels", Long.valueOf(720));
+        d0.put("uuid", "5f2b1f8c-display");
+        d0.put("maxFPS", Long.valueOf(60));
+        displays.add(d0);
+        // 第二块屏：宽高用字符串给（有的固件这么发）
+        java.util.Map<String, Object> d1 = new java.util.LinkedHashMap<String, Object>();
+        d1.put("widthPixels", "1280");
+        d1.put("heightPixels", "0x2D0");     // 720
+        displays.add(d1);
+        root.put("displays", displays);
+
+        com.carbridge.carplay.core.AirPlayInfo info = com.carbridge.carplay.core.AirPlayInfo.parse(root);
+        check(info.displays().size() == 2, "解析出 2 块屏");
+        com.carbridge.carplay.core.AirPlayInfo.Display p = info.primaryDisplay();
+        check(p.widthPixels == 1920 && p.heightPixels == 720, "主屏 1920x720（Long 类型）");
+        check(p.maxFps == 60, "主屏 maxFPS=60");
+        com.carbridge.carplay.core.AirPlayInfo.Display s2 = info.displays().get(1);
+        check(s2.widthPixels == 1280 && s2.heightPixels == 720, "字符串/十六进制宽高也能解析（1280x720）");
+        check(s2.maxFps == 30, "没给 maxFPS 时默认 30");
+
+        // HID：uuid 是整数（DiPlay 风格）
+        java.util.Map<String, Object> hid = new java.util.LinkedHashMap<String, Object>();
+        hid.put("uuid", Long.valueOf(0));
+        hid.put("name", "touch");
+        hid.put("hidDescriptor", new byte[]{0x05, 0x01});
+        java.util.List<Object> hids = new java.util.ArrayList<Object>();
+        hids.add(hid);
+        root.put("hidDevices", hids);
+        info = com.carbridge.carplay.core.AirPlayInfo.parse(root);
+        check(info.hidDevices().size() == 1, "解析出 1 个 HID 设备");
+        check("0".equals(info.hidDevices().get(0).uuid), "HID uuid 为整数时转成字符串");
+
+        // 音频档：type=100 media + telephony，位掩码判断
+        java.util.Map<String, Object> fmt1 = new java.util.LinkedHashMap<String, Object>();
+        fmt1.put("type", Long.valueOf(100));
+        fmt1.put("audioType", "media");
+        fmt1.put("audioOutputFormats", Long.valueOf(1L << 11 | 1L << 22));  // PCM44k + AAC-LC
+        java.util.Map<String, Object> fmt2 = new java.util.LinkedHashMap<String, Object>();
+        fmt2.put("type", Long.valueOf(100));
+        fmt2.put("audioType", "telephony");
+        fmt2.put("audioOutputFormats", Long.valueOf(1L << 10));
+        java.util.List<Object> fmts = new java.util.ArrayList<Object>();
+        fmts.add(fmt1);
+        fmts.add(fmt2);
+        root.put("audioFormats", fmts);
+
+        // 延迟表：按 (type, audioType) 配到对应档
+        java.util.Map<String, Object> lat = new java.util.LinkedHashMap<String, Object>();
+        lat.put("type", Long.valueOf(100));
+        lat.put("audioType", "media");
+        lat.put("outputLatencyMicros", Long.valueOf(25000));
+        java.util.List<Object> lats = new java.util.ArrayList<Object>();
+        lats.add(lat);
+        root.put("audioLatencies", lats);
+        root.put("keepAliveSendStatsAsBody", Boolean.TRUE);
+
+        info = com.carbridge.carplay.core.AirPlayInfo.parse(root);
+        check(info.audioFormats().size() == 2, "解析出 2 个音频档");
+        com.carbridge.carplay.core.AirPlayInfo.AudioFormat media = info.audioFormats().get(0);
+        check(media.supportsPcm44k() && media.supportsAacLc44k(), "media 档识别 PCM44k + AAC-LC 位");
+        check(media.outputLatencyMicros == 25000, "media 档配上 25ms 延迟");
+        com.carbridge.carplay.core.AirPlayInfo.AudioFormat tel = info.audioFormats().get(1);
+        check(!tel.supportsPcm44k(), "telephony 档不该被认成 PCM44k");
+        check(info.keepAliveSendStatsAsBody, "keepAliveSendStatsAsBody=true 被识别");
+
+        // 垃圾输入
+        check(com.carbridge.carplay.core.AirPlayInfo.parse(null).displays().isEmpty(), "null 根节点 → 空");
+        check(com.carbridge.carplay.core.AirPlayInfo.parse("不是字典").displays().isEmpty(),
+                "字符串根节点 → 空");
     }
 
     // ---------------------------------------------------------------- 密码学向量
