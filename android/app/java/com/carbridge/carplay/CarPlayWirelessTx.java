@@ -999,6 +999,18 @@ public final class CarPlayWirelessTx {
         }
     }
 
+    /** 把音频路由模块的日志并进会话日志。 */
+    private com.carbridge.carplay.audio.CarAudioRouter.Log audioLog() {
+        if (audioLogAdapter == null) {
+            audioLogAdapter = new com.carbridge.carplay.audio.CarAudioRouter.Log() {
+                @Override public void onLog(String line) { log(line); }
+            };
+        }
+        return audioLogAdapter;
+    }
+
+    private com.carbridge.carplay.audio.CarAudioRouter.Log audioLogAdapter;
+
     /**
      * 上报通话状态给车机（iAP2 {@code 0x4155 CallStateUpdate}）。
      *
@@ -1012,9 +1024,30 @@ public final class CarPlayWirelessTx {
         s.setPhoneCallActive(active);
         // 通话开始 → 若之前 HFP 没连上，再试一次把通话音频交给车机。
         // 否则现场就是「打电话时手机发音」（HFP 在会话建立时被拒、又没人重试）。
-        if (active && !callAudioRouted) {
-            log("通话开始，重新尝试把通话音频交给车机（HFP）");
-            routeCallAudioToCar();
+        if (active) {
+            // 通话开始：先打一次音频现场（HFP 连没连、SCO 在不在、系统把谁当通话设备），
+            // 再尝试把音频交给车机，1.5s 后再打一次看结果 —— 只打一次看不出变化。
+            com.carbridge.carplay.audio.CarAudioRouter.describeRoute(ctx, audioLog());
+            if (!callAudioRouted) {
+                log("通话开始，重新尝试把通话音频交给车机（HFP）");
+                routeCallAudioToCar();
+            }
+            main.postDelayed(new Runnable() {
+                @Override public void run() {
+                    com.carbridge.carplay.audio.CarAudioRouter.describeRoute(ctx, audioLog());
+                }
+            }, 1500);
+        } else {
+            // 通话结束：还原默认通话设备，并把还原后的现场也打出来 ——
+            // 「打完电话掉线」时有这一行才能判断是路由没还原还是车机自己断的。
+            com.carbridge.carplay.audio.CarAudioRouter.clearCommunicationDevice(ctx, audioLog());
+            callAudioRouted = false;
+            main.postDelayed(new Runnable() {
+                @Override public void run() {
+                    com.carbridge.carplay.audio.CarAudioRouter.describeRoute(ctx, audioLog());
+                    log("通话结束后的会话状态：" + state);
+                }
+            }, 1500);
         }
     }
 

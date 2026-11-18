@@ -71,7 +71,7 @@ public final class CarAudioRouter {
         }
         if (headsetProxy != null && isConnectedTo(ctx, car)) {
             emit(log, "通话音频：车机 HFP 已经是连上的");
-            setCommunicationDevice(ctx, car, log);
+            setCommunicationDeviceRetry(ctx, car, log, 3);
             setLocalRingMuted(ctx, true, log);
             return true;
         }
@@ -301,7 +301,7 @@ public final class CarAudioRouter {
                 if (gen != headsetWaitGen) return;     // 已被新的一轮取代
                 if (isConnectedTo(ctx, car)) {
                     emit(log, "通话音频：车机 HFP 已连上 ✓");
-                    setCommunicationDevice(ctx, car, log);
+                    setCommunicationDeviceRetry(ctx, car, log, 3);
                     setLocalRingMuted(ctx, true, log);
                     return;
                 }
@@ -422,7 +422,90 @@ public final class CarAudioRouter {
         }
     }
 
-        /**
+    
+    /**
+     * 把当前音频路由打出来（通话诊断用）。
+     *
+     * <p>现场最常见的一句是「打电话还是手机在响」，但仅凭这句话没法判断是
+     * HFP 没连上、SCO 没建立，还是系统把通话设备选成了听筒。把这三件事一次打全，
+     * 下次拿到日志就能直接定位，不用再猜。
+     */
+    public static void describeRoute(Context ctx, Log log) {
+        try {
+            AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
+            if (am == null) { emit(log, "音频诊断：拿不到 AudioManager"); return; }
+            StringBuilder sb = new StringBuilder("音频诊断：mode=").append(am.getMode());
+            if (Build.VERSION.SDK_INT >= 31) {
+                AudioDeviceInfo cd = am.getCommunicationDevice();
+                sb.append("；通话设备=").append(cd == null ? "无" : (cd.getType() + "@" + cd.getAddress()));
+            }
+            sb.append("；输出设备=[");
+            for (AudioDeviceInfo info : am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
+                if (info.getType() == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+                        || info.getType() == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP) {
+                    sb.append(info.getType() == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ? "SCO:" : "A2DP:")
+                            .append(info.getAddress()).append(' ');
+                }
+            }
+            sb.append("]；HFP代理=").append(headsetProxy == null ? "未拿到" : "已持有");
+            if (headsetProxy != null) {
+                sb.append("；HFP连接=").append(headsetProxy.getConnectedDevices() != null);
+            }
+            emit(log, sb.toString());
+        } catch (Throwable t) {
+            emit(log, "音频诊断失败: " + t);
+        }
+    }
+
+    /** 通话结束：把通话设备还原成系统默认，避免路由被我们钉死。 */
+    public static void clearCommunicationDevice(Context ctx, Log log) {
+        if (Build.VERSION.SDK_INT < 31) return;
+        try {
+            AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
+            if (am == null) return;
+            AudioDeviceInfo cur = am.getCommunicationDevice();
+            am.clearCommunicationDevice();
+            emit(log, "通话音频：通话结束，已还原默认通话设备（之前是 "
+                    + (cur == null ? "无" : cur.getType() + "@" + cur.getAddress()) + "）");
+        } catch (Throwable t) {
+            emit(log, "通话音频：还原默认设备失败: " + t);
+        }
+    }
+
+
+    /**
+     * 带重试地把车机设为通话设备。
+     *
+     * <p>SCO 链路在通话刚建立时往往还没出现在设备列表里（实测要几百毫秒），
+     * 只试一次会失败并落回手机出声。这里按 800ms 间隔重试，最多 3 次。
+     */
+    public static void setCommunicationDeviceRetry(final Context ctx, final BluetoothDevice car,
+                                                   final Log log, final int attemptsLeft) {
+        if (Build.VERSION.SDK_INT < 31 || car == null) return;
+        if (isCommunicationDevice(ctx, car)) return;   // 已经是车机，不用再试
+        setCommunicationDevice(ctx, car, log);
+        if (attemptsLeft <= 0) return;
+        new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+            @Override public void run() {
+                setCommunicationDeviceRetry(ctx, car, log, attemptsLeft - 1);
+            }
+        }, 800);
+    }
+
+    /** 当前通话设备是否就是这台车机。 */
+    private static boolean isCommunicationDevice(Context ctx, BluetoothDevice car) {
+        try {
+            AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
+            if (am == null) return false;
+            AudioDeviceInfo cur = am.getCommunicationDevice();
+            return cur != null && cur.getAddress() != null
+                    && cur.getAddress().equalsIgnoreCase(car.getAddress());
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
      * 静音/恢复本机来电铃声。
      */
     public static void setLocalRingMuted(Context ctx, boolean muted, Log log) {
