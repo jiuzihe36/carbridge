@@ -64,10 +64,34 @@ public final class Iap2Csm {
 
     /** 增量解析器：喂入链路层载荷字节流，吐出完整 CSM 消息。 */
     public static final class Parser {
+        /**
+         * 待拼帧的缓冲上限。
+         *
+         * <p>没有这个上限时，对端只要持续发「看似帧头、但长度字段永远对不上」的字节，
+         * 缓冲就会无限增长（实测构造 16MB 垃圾就能把 App 顶到 OOM）。
+         * 超限直接丢弃并计数，让调用方能从日志里看出「对端在发垃圾」。
+         */
+        static final int MAX_PENDING = 256 * 1024;
+
         private final ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        private long dropped;
+
+        /** 因为缓冲超限被丢掉的字节数（诊断用）。 */
+        public long droppedBytes() {
+            return dropped;
+        }
 
         public List<Message> feed(byte[] data) {
+            if (data == null || data.length == 0) return new ArrayList<Message>();
             buffer.write(data, 0, data.length);
+            if (buffer.size() > MAX_PENDING) {
+                // 保留最后一个字节，避免下一次从「帧头中间」开始重新对齐时丢掉边界
+                byte[] all = buffer.toByteArray();
+                int keep = Math.min(MAX_PENDING / 2, all.length);
+                dropped += all.length - keep;
+                buffer.reset();
+                buffer.write(all, all.length - keep, keep);
+            }
             byte[] all = buffer.toByteArray();
             List<Message> out = new ArrayList<Message>();
             int off = 0;
