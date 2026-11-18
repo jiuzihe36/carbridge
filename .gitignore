@@ -19,6 +19,15 @@ docs/*.md
 !docs/ARCHITECTURE.md
 tools/*
 !tools/fakecar/
+# 测试与守卫脚本要跟随仓库：它们定义了「改完怎么验」
+!tools/carbridge-tests/
+!tools/fakecar-jvm/
+!tools/smoke.sh
+!tools/check-arch.sh
+!tools/wireless-adb.py
+# 但测试工程的编译产物不进仓库
+tools/carbridge-tests/out/
+tools/fakecar-jvm/out/
 
 # 本地虚拟环境
 .fakecar-venv/
