@@ -147,4 +147,24 @@
     <string name="srcvers_950">950.7.1 · 兼容模式（默认）</string>
     <string name="srcvers_follow">跟随 AirPlay · 566.25.21</string>
     <string name="srcvers_changed">广播版本已改为 %1$s，下次连接生效</string>
+
+    <!-- 布局里原先硬编码的文案（统一收进资源，便于改文案与后续多语言） -->
+    <string name="guide_wizard_title">首次连接向导</string>
+    <string name="guide_subtitle">三步让车机把本机当成 iPhone</string>
+    <string name="guide_skip">跳过</string>
+    <string name="guide_order_hint">车机只在自己「配对」的那一刻查一次手机的蓝牙服务，所以顺序不能颠倒：先开蓝牙，再配对，最后去车机点 CarPlay。</string>
+    <string name="guide_step1_title">第 1 步 · 打开蓝牙</string>
+    <string name="guide_status_pending">未完成</string>
+    <string name="guide_step1_body">现在：把手机蓝牙打开，并保持开启（下拉通知栏点蓝牙图标即可）。</string>
+    <string name="guide_step2_title">第 2 步 · 与车机配对</string>
+    <string name="guide_status_pending2">未完成</string>
+    <string name="guide_step2_body">现在：在车机蓝牙列表里找到本机并配对 —— 配对全程别关这个 App，车机就是在这一刻查信标的。</string>
+    <string name="guide_step3_title">第 3 步 · 车机点 CarPlay</string>
+    <string name="guide_step3_body">现在：到车机桌面点「Apple CarPlay」图标 —— 车机不会自己弹，第一次可能要等 20 秒再点一次。</string>
+    <string name="guide_trouble_hint">配对一直转圈？把车机里本机的旧记录、手机里车机的旧记录都删掉，再配一次。车机若还连着别的蓝牙设备，会直接拒绝新的配对。</string>
+    <string name="guide_beacon_title">蓝牙信标</string>
+    <string name="guide_beacon_idle">未检测 · 点「开始检测」</string>
+    <string name="guide_beacon_check">开始检测</string>
+    <string name="help_export_diag">导出诊断包（日志+身份+配置）</string>
+    <string name="help_autoreconnect">自动重连</string>
 </resources>

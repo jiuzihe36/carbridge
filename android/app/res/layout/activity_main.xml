@@ -599,7 +599,7 @@
                             android:layout_height="44dp"
                             android:background="?android:attr/selectableItemBackground"
                             android:gravity="center_vertical"
-                            android:text="导出诊断包（日志+身份+配置）"
+                            android:text="@string/help_export_diag"
                             android:textColor="@color/accent"
                             android:textSize="15sp"
                             android:textStyle="bold" />
@@ -610,7 +610,7 @@
                             android:layout_height="48dp"
                             android:background="?android:attr/selectableItemBackground"
                             android:gravity="center_vertical"
-                            android:text="自动重连"
+                            android:text="@string/help_autoreconnect"
                             android:textColor="@color/ink"
                             android:textSize="15sp" />
 
