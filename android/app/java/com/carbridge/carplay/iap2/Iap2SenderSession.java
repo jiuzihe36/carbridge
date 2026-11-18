@@ -831,9 +831,6 @@ public final class Iap2SenderSession {
         sendCarPlayAvailability();
     }
 
-        /**
-     * 自适应解析 0x5703（AccessoryWiFiConfiguration）。
-     */
     /** 0x5703 的自适应解析搬到了 {@link WifiConfigParser}（纯逻辑、有单测）。 */
     private static WifiConfig parseWifi(List<Iap2Csm.Param> params) {
         WifiConfigParser.Cfg c = WifiConfigParser.parse(params);
