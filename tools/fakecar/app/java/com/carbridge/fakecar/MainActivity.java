@@ -168,13 +168,7 @@ public final class MainActivity extends Activity {
         log("目标手机先和本机蓝牙配对，再点「自动找手机并连接」");
         // 自动化用：adb shell am start -n com.carbridge.fakecar/.MainActivity --ez autoconnect true
         // 冒烟测试要把「点按钮」这一步也自动化，否则每次都要人手点。
-        if (getIntent() != null && getIntent().getBooleanExtra("autoconnect", false)) {
-            main.postDelayed(new Runnable() {
-                @Override public void run() {
-                    if (btnAuto != null) btnAuto.performClick();
-                }
-            }, 800);
-        }
+        autoConnectIfRequested();
         log("屏幕流会自动渲染到上方画面，直接点画面即可触摸回传手机");
     }
 
@@ -216,6 +210,26 @@ public final class MainActivity extends Activity {
 
     private void runInBackground(final Runnable r) {
         new Thread(r, "fakecar-bg").start();
+    }
+
+    /** 冒烟测试用：adb 带 --ez autoconnect true 启动时自动点「找手机并连接」。 */
+    private void autoConnectIfRequested() {
+        if (getIntent() == null || !getIntent().getBooleanExtra("autoconnect", false)) return;
+        getIntent().removeExtra("autoconnect");   // 只触发一次
+        main.postDelayed(new Runnable() {
+            @Override public void run() {
+                if (btnAuto != null) btnAuto.performClick();
+            }
+        }, 800);
+    }
+
+    @Override
+    protected void onNewIntent(android.content.Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        // Activity 已在运行时，am start --ez autoconnect true 走的是 onNewIntent，
+        // 只读 onCreate 的 intent 会漏掉（冒烟脚本踩过这个坑）。
+        autoConnectIfRequested();
     }
 
     private void log(final String line) {
