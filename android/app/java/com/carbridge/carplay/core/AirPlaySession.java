@@ -391,6 +391,24 @@ public final class AirPlaySession {
 
             info = AirPlayInfo.parse(Bplist.read(requestRaw("GET", "/info", Bplist.write(new LinkedHashMap<String, Object>()))));
             AirPlayInfo.Display d = info.primaryDisplay();
+            if (d == null) {
+                // /info 偶尔会「回了但没带 displays」（车机刚起来、或控制通道半闭）。
+                // 直接拿 1200x512 兜底会让画面尺寸完全不对，而用户只看到「画面糊/被拉伸」。
+                // 先重试一次——这一步很便宜，能救回绝大多数瞬时失败。
+                log("WARN: /info 没给 displays，300ms 后重试一次");
+                try {
+                    Thread.sleep(300);
+                    info = AirPlayInfo.parse(Bplist.read(
+                            requestRaw("GET", "/info", Bplist.write(new LinkedHashMap<String, Object>()))));
+                    d = info.primaryDisplay();
+                } catch (Throwable t) {
+                    com.carbridge.carplay.util.Diag.w("AirPlaySession.infoRetry", t);
+                }
+                if (d == null) {
+                    log("✗ 车机两次都没给画布 → 用 1200x512 兜底，画面可能被拉伸；"
+                            + "请把这份日志发出来（需要确认该车 /info 的真实字段）");
+                }
+            }
             if (d != null) {
                 log("车机显示 " + d.widthPixels + "x" + d.heightPixels
                         + " maxFPS=" + d.maxFps + " uuid=" + d.uuid

@@ -38,6 +38,7 @@ public final class SelfTests {
         macText();
         navVoice();
         ducking();
+        wifiConfig();
 
         System.out.println();
         System.out.println("通过 " + passed + " / 失败 " + failed);
@@ -496,6 +497,55 @@ public final class SelfTests {
         byte[] drained = m2.drainPrompt();
         check(drained != null && drained.length == loud.length, "音乐静止时可单独取出提示音");
         check(m2.drainPrompt() == null, "取出后清空");
+    }
+
+    // ---------------------------------------------------------------- 0x5703
+
+    private static void wifiConfig() {
+        section("WifiConfigParser（0x5703 自适应解析）");
+        // 标准布局 {0:ssid,1:pwd,2:ch,3:sec}
+        java.util.List<com.carbridge.carplay.iap2.Iap2Csm.Param> std =
+                com.carbridge.carplay.iap2.Iap2Csm.parseParams(com.carbridge.carplay.iap2.Iap2Csm.concat(
+                        com.carbridge.carplay.iap2.Iap2Csm.paramString(0, "CheryCar"),
+                        com.carbridge.carplay.iap2.Iap2Csm.paramString(1, "12345678"),
+                        com.carbridge.carplay.iap2.Iap2Csm.paramUInt(2, 36, 1),
+                        com.carbridge.carplay.iap2.Iap2Csm.paramUInt(3, 2, 1)));
+        com.carbridge.carplay.iap2.WifiConfigParser.Cfg c =
+                com.carbridge.carplay.iap2.WifiConfigParser.parse(std);
+        check("CheryCar".equals(c.ssid) && "12345678".equals(c.password), "标准布局：SSID/密码");
+        check(c.channel == 36 && c.security == 2, "标准布局：信道/安全类型");
+
+        // DiPlay 布局 {1:ssid,2:pwd,3:ch,4:sec}（没有 id=0）
+        java.util.List<com.carbridge.carplay.iap2.Iap2Csm.Param> diplay =
+                com.carbridge.carplay.iap2.Iap2Csm.parseParams(com.carbridge.carplay.iap2.Iap2Csm.concat(
+                        com.carbridge.carplay.iap2.Iap2Csm.paramString(1, "DiPlayCar"),
+                        com.carbridge.carplay.iap2.Iap2Csm.paramString(2, "abcdefgh"),
+                        com.carbridge.carplay.iap2.Iap2Csm.paramUInt(3, 6, 1),
+                        com.carbridge.carplay.iap2.Iap2Csm.paramUInt(4, 4, 1)));
+        c = com.carbridge.carplay.iap2.WifiConfigParser.parse(diplay);
+        check("DiPlayCar".equals(c.ssid) && c.channel == 6, "DiPlay 布局能识别");
+
+        // 非法信道要能继续尝试下一种布局，最终仍取到有 SSID 的那个
+        java.util.List<com.carbridge.carplay.iap2.Iap2Csm.Param> odd =
+                com.carbridge.carplay.iap2.Iap2Csm.parseParams(com.carbridge.carplay.iap2.Iap2Csm.concat(
+                        com.carbridge.carplay.iap2.Iap2Csm.paramString(0, "EdgeCase"),
+                        com.carbridge.carplay.iap2.Iap2Csm.paramString(1, "pw"),
+                        com.carbridge.carplay.iap2.Iap2Csm.paramUInt(2, 999, 2),   // 非法信道
+                        com.carbridge.carplay.iap2.Iap2Csm.paramUInt(3, 2, 1)));
+        c = com.carbridge.carplay.iap2.WifiConfigParser.parse(odd);
+        check("EdgeCase".equals(c.ssid), "非法信道时仍回落到有 SSID 的布局");
+
+        // 空参数 / 没有 SSID
+        check(!com.carbridge.carplay.iap2.WifiConfigParser.parse(null).usable(), "null 参数不可用");
+        java.util.List<com.carbridge.carplay.iap2.Iap2Csm.Param> noSsid =
+                com.carbridge.carplay.iap2.Iap2Csm.parseParams(
+                        com.carbridge.carplay.iap2.Iap2Csm.paramUInt(2, 6, 1));
+        check(!com.carbridge.carplay.iap2.WifiConfigParser.parse(noSsid).usable(), "没有 SSID 时不可用");
+
+        check(com.carbridge.carplay.iap2.WifiConfigParser.isValidChannel(1), "1 信道合法");
+        check(com.carbridge.carplay.iap2.WifiConfigParser.isValidChannel(165), "165 信道合法");
+        check(!com.carbridge.carplay.iap2.WifiConfigParser.isValidChannel(15), "15 信道非法");
+        check(!com.carbridge.carplay.iap2.WifiConfigParser.isValidChannel(0), "0 信道非法");
     }
 
     // ---------------------------------------------------------------- 工具

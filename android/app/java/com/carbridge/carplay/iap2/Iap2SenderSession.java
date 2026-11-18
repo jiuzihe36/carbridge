@@ -834,45 +834,10 @@ public final class Iap2SenderSession {
         /**
      * 自适应解析 0x5703（AccessoryWiFiConfiguration）。
      */
+    /** 0x5703 的自适应解析搬到了 {@link WifiConfigParser}（纯逻辑、有单测）。 */
     private static WifiConfig parseWifi(List<Iap2Csm.Param> params) {
-        java.util.Map<Integer, Iap2Csm.Param> m = new java.util.HashMap<Integer, Iap2Csm.Param>();
-        for (Iap2Csm.Param p : params) m.put(p.paramId, p);
-
-        int[][] layouts = {
-                {0, 1, 2, 3},   // A 标准
-                {1, 2, 3, 4},   // C DiPlay
-                {0, 1, 3, 2},   // B 标准变体（安全在前）
-                {1, 2, 4, 3},   // D 车机/DiPlay 变体（安全在前）
-        };
-        WifiConfig fallback = null;
-        for (int[] L : layouts) {
-            WifiConfig c = tryWifiLayout(m, L[0], L[1], L[2], L[3]);
-            if (c == null || c.ssid == null || c.ssid.isEmpty()) continue;
-            if (fallback == null) fallback = c;   // 记住第一个 SSID 非空的，兜底用
-            if (isValidChannel(c.channel) && c.security >= 0 && c.security <= 4) {
-                return c;
-            }
-        }
-        return fallback != null ? fallback : new WifiConfig(null, null, 0, 0);
-    }
-
-    private static WifiConfig tryWifiLayout(java.util.Map<Integer, Iap2Csm.Param> m,
-                                            int ssidId, int pwdId, int chId, int secId) {
-        Iap2Csm.Param ssidP = m.get(ssidId);
-        if (ssidP == null) return null;
-        Iap2Csm.Param pwdP = m.get(pwdId);
-        Iap2Csm.Param chP = m.get(chId);
-        Iap2Csm.Param secP = m.get(secId);
-        return new WifiConfig(
-                ssidP.asString(),
-                pwdP == null ? null : pwdP.asString(),
-                chP == null ? 0 : (int) chP.asUInt(),
-                secP == null ? 0 : (int) secP.asUInt());
-    }
-
-    /** WiFi 信道：2.4G 是 1..14，5G 是 36..165。 */
-    private static boolean isValidChannel(int ch) {
-        return (ch >= 1 && ch <= 14) || (ch >= 36 && ch <= 165);
+        WifiConfigParser.Cfg c = WifiConfigParser.parse(params);
+        return new WifiConfig(c.ssid, c.password, c.channel, c.security);
     }
 
     // ---------------------------------------------------------------- 会话端点
