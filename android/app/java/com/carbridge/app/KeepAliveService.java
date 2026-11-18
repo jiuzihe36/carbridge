@@ -165,15 +165,13 @@ public final class KeepAliveService extends Service {
         }
         PendingIntent pi = PendingIntent.getActivity(this, 0, back, piFlags);
 
-        Notification.Builder b = (Build.VERSION.SDK_INT >= 26)
-                ? new Notification.Builder(this, CHANNEL_ID)
-                : new Notification.Builder(this);
+        // minSdk 26：带 channelId 的构造在所有目标设备上都可用，不再需要分支
+        Notification.Builder b = new Notification.Builder(this, CHANNEL_ID);
         b.setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
                 .setContentTitle(getString(R.string.app_name))
                 .setContentText(text)
                 .setContentIntent(pi)
-                .setOngoing(true)
-                .setPriority(Notification.PRIORITY_LOW);
+                .setOngoing(true);   // 优先级由 channel 的 IMPORTANCE_LOW 决定（setPriority 已废弃）
         return b.build();
     }
 }

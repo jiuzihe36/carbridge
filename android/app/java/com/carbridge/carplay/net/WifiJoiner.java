@@ -5,7 +5,6 @@ import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.NetworkRequest;
-import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.SystemClock;
@@ -14,7 +13,13 @@ import java.net.InetAddress;
 
 /**
  * 加入车机热点（iAP2 的 0x5703 拿到 SSID/密码/信道/安全类型后用）。
+ *
+ * <p>为什么整类压制 deprecation/rawtypes：Android 9–12 上要「连到指定 SSID」只有
+ * {@code android.net.wifi.WifiConfiguration} 这条老路可用；{@code WifiNetworkSpecifier} 是点对点请求，
+ * 会把系统弹窗拉起来并且拿不到 DHCP 结果，车机侧等不到我们上线。新 API 只在 13+ 才能
+ * 平滑替代，等确认车机最低版本再迁移。这里把警告收敛在这一处，别处再出现就说明是新代码引入的。
  */
+@SuppressWarnings({"deprecation", "rawtypes", "unchecked"})
 public final class WifiJoiner {
 
     public interface Listener {
@@ -251,16 +256,16 @@ public final class WifiJoiner {
                 listener.onFailure("拿不到 WifiManager");
                 return;
             }
-            WifiConfiguration cfg = new WifiConfiguration();
+            android.net.wifi.WifiConfiguration cfg = new android.net.wifi.WifiConfiguration();
             cfg.SSID = "\"" + ssid + "\"";
             if (password == null || password.isEmpty()) {
-                cfg.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.NONE);
+                cfg.allowedKeyManagement.set(android.net.wifi.WifiConfiguration.KeyMgmt.NONE);
             } else {
                 cfg.preSharedKey = "\"" + password + "\"";
             }
             int netId = wm.addNetwork(cfg);
             if (netId == -1) {
-                listener.onFailure("WifiConfiguration 被拒");
+                listener.onFailure("android.net.wifi.WifiConfiguration 被拒");
                 return;
             }
             wm.disconnect();

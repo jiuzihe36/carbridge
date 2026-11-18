@@ -182,6 +182,7 @@ public final class MdnsCarPlay {
         }
     }
 
+    @SuppressWarnings("deprecation")   // minSdk 26：registerServiceInfoCallback/getHostAddresses 要 API 34
     private void resolve(final NsdServiceInfo found, final String localPrefix) {
         nsd.resolveService(found, new NsdManager.ResolveListener() {
             @Override public void onServiceResolved(NsdServiceInfo info) {

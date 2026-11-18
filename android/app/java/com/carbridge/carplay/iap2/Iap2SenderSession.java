@@ -465,10 +465,8 @@ public final class Iap2SenderSession {
     }
 
     // ---------------------------------------------------------------- 订阅应答
-
-        /**
-     * 车机在认证后会连着发好几个「Start*」订阅请求，**每一个都要应答**。
-     */
+    // 车机在认证后会连着发好几个「Start*」订阅请求，**每一个都要应答**，
+    // 漏答一个车机就不再推进（表现为「认证过了但不出画面」）。
 
     /** 0xAE00 → 两条 0xAE01：最大电流 1000 mA，然后「会充电」。 */
     private void answerPowerUpdates() {
@@ -968,7 +966,6 @@ public final class Iap2SenderSession {
         listener.onLog(msg);
     }
 
-    /** 把参数 id 列表打成字符串，便于诊断对端 0x5703 的字段布局。 */
     /** 是否像 IPv4 地址（形如 1.2.3.4）。 */
     private static boolean isIpv4(String s) {
         if (s == null || s.isEmpty() || s.contains(":")) return false;

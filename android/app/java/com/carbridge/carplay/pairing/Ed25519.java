@@ -134,9 +134,9 @@ public final class Ed25519 {
     /** clamp：按 RFC 8032 清零/置位后取 32 字节小端整数。 */
     private static BigInteger clamp(byte[] h, int off, int len) {
         byte[] c = java.util.Arrays.copyOfRange(h, off, off + len);
-        c[0] &= 248;
-        c[31] &= 127;
-        c[31] |= 64;
+        c[0] = (byte) (c[0] & 248);   // RFC 钳位：清零低 3 位
+        c[31] = (byte) (c[31] & 127); // RFC 钳位：清最高位
+        c[31] = (byte) (c[31] | 64);  // RFC 钳位：置第二高位
         return le255(c, 0);
     }
 

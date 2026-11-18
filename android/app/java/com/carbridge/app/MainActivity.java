@@ -157,9 +157,9 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
                 MainActivity.this.log(str);
             }
         });
-        setContentView(2130968577);
-        this.mainScroll = (android.widget.ScrollView) findViewById(2130903076);
-        final android.view.View viewFindViewById = findViewById(2130903066);
+        setContentView(R.layout.activity_main);
+        this.mainScroll = (android.widget.ScrollView) findViewById(R.id.main_scroll);
+        final android.view.View viewFindViewById = findViewById(R.id.header_divider);
         if (this.mainScroll != null && viewFindViewById != null) {
             this.mainScroll.setOnScrollChangeListener(new android.view.View.OnScrollChangeListener() { // from class: com.carbridge.app.MainActivity.2
 
@@ -175,7 +175,7 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
         requestRuntimePermissions();
         startCarPlayBeacon();
         log("carbridge v0.1.1 启动，日志文件: " + logFile().getAbsolutePath());
-        this.stateView = (android.widget.TextView) findViewById(2130903089);
+        this.stateView = (android.widget.TextView) findViewById(R.id.state);
         installCrashLogger();
         try {
             android.content.SharedPreferences sharedPreferences = getSharedPreferences("guide", 0);
@@ -186,9 +186,9 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
         } catch (java.lang.Throwable th) {
             com.carbridge.carplay.util.Diag.w("guide", th);
         }
-        this.detailView = (android.widget.TextView) findViewById(2130903055);
-        this.elapsedView = (android.widget.TextView) findViewById(2130903063);
-        this.logView = (android.widget.TextView) findViewById(2130903072);
+        this.detailView = (android.widget.TextView) findViewById(R.id.detail);
+        this.elapsedView = (android.widget.TextView) findViewById(R.id.elapsed);
+        this.logView = (android.widget.TextView) findViewById(R.id.log);
         this.logView.setOnLongClickListener(new android.view.View.OnLongClickListener() { // from class: com.carbridge.app.MainActivity.3
             @Override // android.view.View.OnLongClickListener
             public boolean onLongClick(android.view.View view) {
@@ -202,19 +202,19 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
                 return true;
             }
         });
-        this.btnConnect = (android.widget.TextView) findViewById(2130903045);
-        this.logHeader = (android.widget.TextView) findViewById(2130903074);
-        this.logBody = findViewById(2130903073);
-        this.logScroll = (android.widget.ScrollView) findViewById(2130903075);
-        this.badgeView = (android.widget.TextView) findViewById(2130903041);
-        this.metricFps = (android.widget.TextView) findViewById(2130903078);
-        this.metricResolution = (android.widget.TextView) findViewById(2130903079);
-        this.metricBitrate = (android.widget.TextView) findViewById(2130903077);
-        this.stepsContainer = (android.widget.LinearLayout) findViewById(2130903093);
-        this.stepsProgress = (android.widget.ProgressBar) findViewById(2130903094);
-        this.stepsProgressText = (android.widget.TextView) findViewById(2130903095);
+        this.btnConnect = (android.widget.TextView) findViewById(R.id.btn_connect);
+        this.logHeader = (android.widget.TextView) findViewById(R.id.log_header);
+        this.logBody = findViewById(R.id.log_body);
+        this.logScroll = (android.widget.ScrollView) findViewById(R.id.log_scroll);
+        this.badgeView = (android.widget.TextView) findViewById(R.id.badge);
+        this.metricFps = (android.widget.TextView) findViewById(R.id.metric_fps);
+        this.metricResolution = (android.widget.TextView) findViewById(R.id.metric_resolution);
+        this.metricBitrate = (android.widget.TextView) findViewById(R.id.metric_bitrate);
+        this.stepsContainer = (android.widget.LinearLayout) findViewById(R.id.steps_container);
+        this.stepsProgress = (android.widget.ProgressBar) findViewById(R.id.steps_progress);
+        this.stepsProgressText = (android.widget.TextView) findViewById(R.id.steps_progress_text);
         buildStepRows();
-        android.widget.TextView textView = (android.widget.TextView) findViewById(2130903040);
+        android.widget.TextView textView = (android.widget.TextView) findViewById(R.id.about_version);
         if (textView != null) {
             try {
                 textView.setText(getPackageManager().getPackageInfo(getPackageName(), 0).versionName);
@@ -222,12 +222,12 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
                 com.carbridge.carplay.util.Diag.w("MainActivity", th2);
             }
         }
-        this.idBtName = (android.widget.TextView) findViewById(2130903068);
-        this.idBtMac = (android.widget.TextView) findViewById(2130903067);
-        this.idSdp = (android.widget.TextView) findViewById(2130903069);
-        this.idSrcvers = (android.widget.TextView) findViewById(2130903070);
-        this.identityHint = findViewById(2130903071);
-        android.view.View viewFindViewById2 = findViewById(2130903086);
+        this.idBtName = (android.widget.TextView) findViewById(R.id.id_bt_name);
+        this.idBtMac = (android.widget.TextView) findViewById(R.id.id_bt_mac);
+        this.idSdp = (android.widget.TextView) findViewById(R.id.id_sdp);
+        this.idSrcvers = (android.widget.TextView) findViewById(R.id.id_srcvers);
+        this.identityHint = findViewById(R.id.identity_hint);
+        android.view.View viewFindViewById2 = findViewById(R.id.row_bt_mac);
         if (viewFindViewById2 != null) {
             viewFindViewById2.setOnClickListener(new android.view.View.OnClickListener() { // from class: com.carbridge.app.MainActivity.4
                 @Override // android.view.View.OnClickListener
@@ -236,7 +236,7 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
                 }
             });
         }
-        android.view.View viewFindViewById3 = findViewById(2130903087);
+        android.view.View viewFindViewById3 = findViewById(R.id.row_srcvers);
         if (viewFindViewById3 != null) {
             viewFindViewById3.setOnClickListener(new android.view.View.OnClickListener() { // from class: com.carbridge.app.MainActivity.5
                 @Override // android.view.View.OnClickListener
@@ -246,9 +246,9 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
             });
         }
         refreshIdentity();
-        setupCollapse(2130903065, 2130903064, 2131099679);
-        setupCollapse(2130903083, 2130903082, 2131099727);
-        android.view.View viewFindViewById4 = findViewById(2130903048);
+        setupCollapse(R.id.guide_header, R.id.guide_body, R.string.guide_title);
+        setupCollapse(R.id.quality_header, R.id.quality_body, R.string.quality_title);
+        android.view.View viewFindViewById4 = findViewById(R.id.btn_export);
         if (viewFindViewById4 != null) {
             viewFindViewById4.setOnClickListener(new android.view.View.OnClickListener() { // from class: com.carbridge.app.MainActivity.6
                 @Override // android.view.View.OnClickListener
@@ -257,7 +257,7 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
                 }
             });
         }
-        this.autoReconnectRow = (android.widget.TextView) findViewById(2130903085);
+        this.autoReconnectRow = (android.widget.TextView) findViewById(R.id.row_autoreconnect);
         if (this.autoReconnectRow != null) {
             refreshAutoReconnectRow();
             this.autoReconnectRow.setOnClickListener(new android.view.View.OnClickListener() { // from class: com.carbridge.app.MainActivity.7
@@ -271,10 +271,10 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
             });
         }
         setupLogCollapse();
-        this.pages[0] = findViewById(2130903080);
-        this.pages[1] = findViewById(2130903081);
-        this.tabs[0] = (android.widget.TextView) findViewById(2130903097);
-        this.tabs[1] = (android.widget.TextView) findViewById(2130903098);
+        this.pages[0] = findViewById(R.id.page_ops);
+        this.pages[1] = findViewById(R.id.page_progress);
+        this.tabs[0] = (android.widget.TextView) findViewById(R.id.tab_ops);
+        this.tabs[1] = (android.widget.TextView) findViewById(R.id.tab_progress);
         for (int i = 0; i < this.tabs.length; i++) {
             final int i2 = i;
             this.tabs[i].setOnClickListener(new android.view.View.OnClickListener() { // from class: com.carbridge.app.MainActivity.8
@@ -287,14 +287,14 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
         }
         showPage(0);
         setupQualitySettings();
-        this.stateView.setTag(findViewById(2130903057));
+        this.stateView.setTag(findViewById(R.id.dot));
         this.btnConnect.setOnClickListener(new android.view.View.OnClickListener() { // from class: com.carbridge.app.MainActivity.9
             @Override // android.view.View.OnClickListener
             public void onClick(android.view.View view) {
                 MainActivity.this.toggleConnect();
             }
         });
-        this.btnCarPlay = (android.widget.TextView) findViewById(2130903044);
+        this.btnCarPlay = (android.widget.TextView) findViewById(R.id.btn_carplay);
         this.btnCarPlay.setOnClickListener(new android.view.View.OnClickListener() { // from class: com.carbridge.app.MainActivity.10
             @Override // android.view.View.OnClickListener
             public void onClick(android.view.View view) {
@@ -302,7 +302,7 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
             }
         });
         getSharedPreferences(PREF_NAME, 0);
-        android.widget.TextView textView2 = (android.widget.TextView) findViewById(2130903049);
+        android.widget.TextView textView2 = (android.widget.TextView) findViewById(R.id.btn_selfcheck);
         if (textView2 != null) {
             textView2.setOnClickListener(new android.view.View.OnClickListener() { // from class: com.carbridge.app.MainActivity.11
                 @Override // android.view.View.OnClickListener
@@ -311,7 +311,7 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
                 }
             });
         }
-        android.widget.TextView textView3 = (android.widget.TextView) findViewById(2130903043);
+        android.widget.TextView textView3 = (android.widget.TextView) findViewById(R.id.btn_autostart);
         if (textView3 != null) {
             textView3.setOnClickListener(new android.view.View.OnClickListener() { // from class: com.carbridge.app.MainActivity.12
                 @Override // android.view.View.OnClickListener
@@ -320,13 +320,13 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
                 }
             });
         }
-        findViewById(2130903046).setOnClickListener(new android.view.View.OnClickListener() { // from class: com.carbridge.app.MainActivity.13
+        findViewById(R.id.btn_copy).setOnClickListener(new android.view.View.OnClickListener() { // from class: com.carbridge.app.MainActivity.13
             @Override // android.view.View.OnClickListener
             public void onClick(android.view.View view) {
                 MainActivity.this.copyLog();
             }
         });
-        findViewById(2130903050).setOnClickListener(new android.view.View.OnClickListener() { // from class: com.carbridge.app.MainActivity.14
+        findViewById(R.id.btn_share).setOnClickListener(new android.view.View.OnClickListener() { // from class: com.carbridge.app.MainActivity.14
             @Override // android.view.View.OnClickListener
             public void onClick(android.view.View view) {
                 MainActivity.this.shareLog();
@@ -374,10 +374,10 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
         this.carW = sharedPreferences.getInt(KEY_CAR_W, 0);
         this.carH = sharedPreferences.getInt(KEY_CAR_H, 0);
         this.carFps = sharedPreferences.getInt(KEY_CAR_FPS, 0);
-        this.editWidth = (android.widget.EditText) findViewById(2130903062);
-        this.editHeight = (android.widget.EditText) findViewById(2130903061);
-        this.qualityTargetView = (android.widget.TextView) findViewById(2130903084);
-        this.switchAutoFit = (android.widget.CheckBox) findViewById(2130903096);
+        this.editWidth = (android.widget.EditText) findViewById(R.id.edit_width);
+        this.editHeight = (android.widget.EditText) findViewById(R.id.edit_height);
+        this.qualityTargetView = (android.widget.TextView) findViewById(R.id.quality_target);
+        this.switchAutoFit = (android.widget.CheckBox) findViewById(R.id.switch_auto_fit);
         if (this.editWidth != null) {
             this.editWidth.setText(java.lang.String.valueOf(this.encWidth));
         }
@@ -423,7 +423,7 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
         for (int i = 0; i < FPS_OPTIONS.length; i++) {
             strArr[i] = java.lang.String.valueOf(FPS_OPTIONS[i]);
         }
-        buildSegment((android.widget.LinearLayout) findViewById(2130903088), strArr, this.fpsIndex, new com.carbridge.app.MainActivity.OnPick() { // from class: com.carbridge.app.MainActivity.19
+        buildSegment((android.widget.LinearLayout) findViewById(R.id.seg_fps), strArr, this.fpsIndex, new com.carbridge.app.MainActivity.OnPick() { // from class: com.carbridge.app.MainActivity.19
             @Override // com.carbridge.app.MainActivity.OnPick
             public void onPick(int i2) {
                 if (i2 == MainActivity.this.fpsIndex) {
@@ -501,19 +501,19 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
             return;
         }
         if (!this.autoFit) {
-            this.qualityTargetView.setText(getString(2131099724, new java.lang.Object[]{java.lang.Integer.valueOf(this.encWidth), java.lang.Integer.valueOf(this.encHeight), java.lang.Integer.valueOf(FPS_OPTIONS[this.fpsIndex]), java.lang.Integer.valueOf((this.client == null || this.client.encodedWidth() <= 0) ? this.encWidth : this.client.encodedWidth()), java.lang.Integer.valueOf((this.client == null || this.client.encodedHeight() <= 0) ? this.encHeight : this.client.encodedHeight()), java.lang.Integer.valueOf((this.client == null || this.client.encodedFps() <= 0) ? FPS_OPTIONS[this.fpsIndex] : this.client.encodedFps())}));
+            this.qualityTargetView.setText(getString(R.string.quality_target_manual, new java.lang.Object[]{java.lang.Integer.valueOf(this.encWidth), java.lang.Integer.valueOf(this.encHeight), java.lang.Integer.valueOf(FPS_OPTIONS[this.fpsIndex]), java.lang.Integer.valueOf((this.client == null || this.client.encodedWidth() <= 0) ? this.encWidth : this.client.encodedWidth()), java.lang.Integer.valueOf((this.client == null || this.client.encodedHeight() <= 0) ? this.encHeight : this.client.encodedHeight()), java.lang.Integer.valueOf((this.client == null || this.client.encodedFps() <= 0) ? FPS_OPTIONS[this.fpsIndex] : this.client.encodedFps())}));
         } else {
             if (this.carW <= 0 || this.carH <= 0) {
-                this.qualityTargetView.setText(2131099725);
+                this.qualityTargetView.setText(R.string.quality_target_unknown);
                 return;
             }
             int[] iArrFit = com.carbridge.carplay.core.DisplayGeometry.fit(this.carW, this.carH);
             if (iArrFit == null) {
-                this.qualityTargetView.setText(2131099725);
+                this.qualityTargetView.setText(R.string.quality_target_unknown);
                 return;
             }
             int iClampFps = com.carbridge.carplay.core.DisplayGeometry.clampFps(this.carFps);
-            this.qualityTargetView.setText(getString(2131099723, new java.lang.Object[]{java.lang.Integer.valueOf(iArrFit[0]), java.lang.Integer.valueOf(iArrFit[1]), java.lang.Integer.valueOf(iClampFps), java.lang.Integer.valueOf((this.client == null || this.client.encodedWidth() <= 0) ? iArrFit[0] : this.client.encodedWidth()), java.lang.Integer.valueOf((this.client == null || this.client.encodedHeight() <= 0) ? iArrFit[1] : this.client.encodedHeight()), java.lang.Integer.valueOf((this.client == null || this.client.encodedFps() <= 0) ? iClampFps : this.client.encodedFps())}));
+            this.qualityTargetView.setText(getString(R.string.quality_target, new java.lang.Object[]{java.lang.Integer.valueOf(iArrFit[0]), java.lang.Integer.valueOf(iArrFit[1]), java.lang.Integer.valueOf(iClampFps), java.lang.Integer.valueOf((this.client == null || this.client.encodedWidth() <= 0) ? iArrFit[0] : this.client.encodedWidth()), java.lang.Integer.valueOf((this.client == null || this.client.encodedHeight() <= 0) ? iArrFit[1] : this.client.encodedHeight()), java.lang.Integer.valueOf((this.client == null || this.client.encodedFps() <= 0) ? iClampFps : this.client.encodedFps())}));
         }
     }
 
@@ -547,7 +547,7 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
 
     /* JADX INFO: Access modifiers changed from: private */
     public void restyleSegments() {
-        android.widget.LinearLayout linearLayout = (android.widget.LinearLayout) findViewById(2130903088);
+        android.widget.LinearLayout linearLayout = (android.widget.LinearLayout) findViewById(R.id.seg_fps);
         if (linearLayout != null) {
             int i = 0;
             while (i < linearLayout.getChildCount()) {
@@ -559,12 +559,12 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
 
     private void styleSegment(android.widget.TextView textView, boolean z) {
         if (z) {
-            textView.setBackgroundResource(2130837516);
-            textView.setTextColor(getResources().getColor(2130771976));
+            textView.setBackgroundResource(R.drawable.bg_seg_selected);
+            textView.setTextColor(getResources().getColor(R.color.ink, getTheme()));
             textView.setTypeface(null, 1);
         } else {
             textView.setBackground(null);
-            textView.setTextColor(getResources().getColor(2130771987));
+            textView.setTextColor(getResources().getColor(R.color.text_dim, getTheme()));
             textView.setTypeface(null, 0);
         }
     }
@@ -573,7 +573,7 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
         if (this.carPlay == null) {
             this.carPlay = new com.carbridge.carplay.bridge.CarPlayBridge(this);
             try {
-                this.carPlay.setSplash(new com.carbridge.carplay.core.SplashFrame(android.graphics.BitmapFactory.decodeResource(getResources(), 2130837521), android.graphics.BitmapFactory.decodeResource(getResources(), 2130837520), getString(2131099746), getString(2131099747)));
+                this.carPlay.setSplash(new com.carbridge.carplay.core.SplashFrame(android.graphics.BitmapFactory.decodeResource(getResources(), R.drawable.carplus_splash_bg), android.graphics.BitmapFactory.decodeResource(getResources(), R.drawable.carplus_logo), getString(R.string.splash_brand), getString(R.string.splash_subtitle)));
             } catch (java.lang.Throwable th) {
                 log("开屏画面初始化失败（不影响主链路）: " + th);
             }
@@ -674,7 +674,7 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
                 MainActivity.this.stateView.setText(string);
                 MainActivity.this.setStateDot(i2);
                 if (statusViewOf.manualHint) {
-                    MainActivity.this.detailView.setText(MainActivity.this.getString(2131099681));
+                    MainActivity.this.detailView.setText(MainActivity.this.getString(R.string.hint_manual));
                     z = true;
                 } else {
                     boolean z2 = (str == null || str.isEmpty() || (str != null && str.equals(string))) ? false : true;
@@ -682,7 +682,7 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
                     z = z2;
                 }
                 MainActivity.this.detailView.setVisibility(z ? 0 : 8);
-                android.view.View viewFindViewById = MainActivity.this.findViewById(2130903056);
+                android.view.View viewFindViewById = MainActivity.this.findViewById(R.id.detail_divider);
                 if (viewFindViewById != null) {
                     viewFindViewById.setVisibility(z ? 0 : 8);
                 }
@@ -852,19 +852,19 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
     public static int stateTextRes(com.carbridge.app.StatusView.Kind kind) {
         switch (com.carbridge.app.MainActivity.AnonymousClass52.$SwitchMap$com$carbridge$app$StatusView$Kind[kind.ordinal()]) {
             case 1:
-                return 2131099763;
+                return R.string.state_waiting;
             case DEF_FPS /* 2 */:
-                return 2131099758;
+                return R.string.state_connecting;
             case 3:
-                return 2131099760;
+                return R.string.state_handshaking;
             case 4:
-                return 2131099762;
+                return R.string.state_streaming;
             case 5:
-                return 2131099759;
+                return R.string.state_error;
             case 6:
-                return 2131099757;
+                return R.string.state_closed;
             default:
-                return 2131099761;
+                return R.string.state_idle;
         }
     }
 
@@ -1109,7 +1109,7 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
         if (this.logHeader == null || this.logBody == null) {
             return;
         }
-        this.logHeader.setText(2131099694);
+        this.logHeader.setText(R.string.log_title);
         setChevron(this.logHeader, false);
         this.logHeader.setOnClickListener(new android.view.View.OnClickListener() { // from class: com.carbridge.app.MainActivity.31
             @Override // android.view.View.OnClickListener
@@ -1134,7 +1134,7 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
     public void copyLog() {
         try {
             ((android.content.ClipboardManager) getSystemService("clipboard")).setPrimaryClip(android.content.ClipData.newPlainText("carbridge", logTailForShare()));
-            android.widget.Toast.makeText(this, 2131099666, 0).show();
+            android.widget.Toast.makeText(this, R.string.copied, 0).show();
         } catch (java.lang.Throwable th) {
             log("复制失败：" + th);
         }
@@ -1151,7 +1151,7 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
             intent.putExtra("android.intent.extra.STREAM", com.carbridge.app.LogProvider.uriFor(LOG_FILE_NAME));
             intent.putExtra("android.intent.extra.SUBJECT", "carbridge 会话日志");
             intent.addFlags(1);
-            startActivity(android.content.Intent.createChooser(intent, getString(2131099665)));
+            startActivity(android.content.Intent.createChooser(intent, getString(R.string.btn_share_log)));
         } catch (java.lang.Throwable th) {
             log("导出失败：" + th);
         }
@@ -1234,8 +1234,11 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
                     systemWindowInsetTop = insets.top;
                     systemWindowInsetBottom = insets.bottom;
                 } else {
-                    systemWindowInsetTop = windowInsets.getSystemWindowInsetTop();
-                    systemWindowInsetBottom = windowInsets.getSystemWindowInsetBottom();
+                    // minSdk 26：getInsets(Type) 要 API 30，老设备只能走这两个已废弃的取值方法
+                    @SuppressWarnings("deprecation") int top = windowInsets.getSystemWindowInsetTop();
+                    @SuppressWarnings("deprecation") int bottom = windowInsets.getSystemWindowInsetBottom();
+                    systemWindowInsetTop = top;
+                    systemWindowInsetBottom = bottom;
                 }
                 view.setPadding(0, systemWindowInsetTop, 0, systemWindowInsetBottom);
                 return windowInsets;
@@ -1245,7 +1248,7 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
     }
 
     private void requestRuntimePermissions() {
-        java.util.ArrayList<java.lang.String> arrayList = new java.util.ArrayList();
+        java.util.ArrayList<java.lang.String> arrayList = new java.util.ArrayList<java.lang.String>();
         if (android.os.Build.VERSION.SDK_INT >= 31) {
             arrayList.add("android.permission.BLUETOOTH_CONNECT");
             arrayList.add("android.permission.BLUETOOTH_SCAN");
@@ -1254,14 +1257,14 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
             arrayList.add("android.permission.NEARBY_WIFI_DEVICES");
             arrayList.add("android.permission.POST_NOTIFICATIONS");
         }
-        java.util.ArrayList arrayList2 = new java.util.ArrayList();
+        java.util.ArrayList<String> arrayList2 = new java.util.ArrayList<String>();
         for (java.lang.String str : arrayList) {
             if (checkSelfPermission(str) != 0) {
                 arrayList2.add(str);
             }
         }
         if (!arrayList2.isEmpty()) {
-            requestPermissions((java.lang.String[]) arrayList2.toArray(new java.lang.String[0]), 1001);
+            requestPermissions(arrayList2.toArray(new java.lang.String[0]), 1001);
             log("申请权限：" + arrayList2);
         }
     }
@@ -1296,6 +1299,7 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
         }
     }
 
+    @SuppressWarnings("deprecation")   // minSdk 26：带 Class 的 getParcelableExtra 需要 API 33
     private void registerBondWatcher() {
         if (this.bondReceiver != null) {
             return;
@@ -1531,7 +1535,7 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
         }
         log("—— 自检结束 ——（缺项按上面提示补，或点「后台运行设置」「自启动设置」）");
         setLogOpen(true);
-        android.widget.Toast.makeText(this, 2131099745, 0).show();
+        android.widget.Toast.makeText(this, R.string.selfcheck_done, 0).show();
     }
 
     /* JADX INFO: Access modifiers changed from: private */
@@ -1606,7 +1610,7 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
                 this.pages[i2].setVisibility(i2 == i ? 0 : 8);
             }
             if (this.tabs[i2] != null) {
-                int colorCompat = getColorCompat(i2 == i ? 2130771968 : 2130771988);
+                int colorCompat = getColorCompat(i2 == i ? R.color.accent : R.color.text_muted);
                 this.tabs[i2].setTextColor(colorCompat);
                 this.tabs[i2].setCompoundDrawableTintList(android.content.res.ColorStateList.valueOf(colorCompat));
                 this.tabs[i2].setTypeface(null, i2 == i ? 1 : 0);
@@ -1643,9 +1647,9 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
         if (textView == null) {
             return;
         }
-        textView.setCompoundDrawablesWithIntrinsicBounds(0, 0, z ? 2130837523 : 2130837524, 0);
+        textView.setCompoundDrawablesWithIntrinsicBounds(0, 0, z ? R.drawable.ic_chevron_down : R.drawable.ic_chevron_right, 0);
         textView.setCompoundDrawablePadding(dp(6.0f));
-        textView.setCompoundDrawableTintList(android.content.res.ColorStateList.valueOf(getColorCompat(2130771988)));
+        textView.setCompoundDrawableTintList(android.content.res.ColorStateList.valueOf(getColorCompat(R.color.text_muted)));
     }
 
     private void buildStepRows() {
@@ -1661,11 +1665,11 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
         android.widget.TextView textView = new android.widget.TextView(this);
         textView.setLayoutParams(new android.widget.LinearLayout.LayoutParams(-1, -2));
         textView.setPadding(0, dp(16.0f), 0, dp(4.0f));
-        textView.setText(2131099743);
+        textView.setText(R.string.section_steps_carplay);
         textView.setTextSize(12.0f);
         textView.setLetterSpacing(0.06f);
         textView.setTypeface(null, 1);
-        textView.setTextColor(getColorCompat(2130771988));
+        textView.setTextColor(getColorCompat(R.color.text_muted));
         this.stepsContainer.addView(textView);
         textView.setTag("header");
         boolean z2 = true;
@@ -1684,7 +1688,7 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
         android.widget.LinearLayout.LayoutParams layoutParams = new android.widget.LinearLayout.LayoutParams(-1, 1);
         layoutParams.leftMargin = dp(22.0f);
         view.setLayoutParams(layoutParams);
-        view.setBackgroundColor(getColorCompat(2130771975));
+        view.setBackgroundColor(getColorCompat(R.color.divider));
         this.stepsContainer.addView(view);
     }
 
@@ -1702,12 +1706,12 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
         textView2.setLayoutParams(new android.widget.LinearLayout.LayoutParams(0, -2, 1.0f));
         textView2.setText(str);
         textView2.setTextSize(14.0f);
-        textView2.setTextColor(getColorCompat(2130771987));
+        textView2.setTextColor(getColorCompat(R.color.text_dim));
         android.widget.TextView textView3 = new android.widget.TextView(this);
         textView3.setLayoutParams(new android.widget.LinearLayout.LayoutParams(-2, -2));
         textView3.setTextSize(12.0f);
-        textView3.setTextColor(getColorCompat(2130771988));
-        textView3.setText(2131099767);
+        textView3.setTextColor(getColorCompat(R.color.text_muted));
+        textView3.setText(R.string.step_pending);
         linearLayout.addView(textView);
         linearLayout.addView(textView2);
         linearLayout.addView(textView3);
@@ -1752,7 +1756,7 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
                 android.widget.TextView textView3 = (android.widget.TextView) linearLayout.getChildAt(DEF_FPS);
                 textView.setText(rowStateCarplayRowState.mark);
                 textView.setTextColor(rowStateCarplayRowState.color);
-                textView2.setTextColor((rowStateCarplayRowState.done || "●".equals(rowStateCarplayRowState.mark)) ? getColorCompat(2130771986) : getColorCompat(2130771987));
+                textView2.setTextColor((rowStateCarplayRowState.done || "●".equals(rowStateCarplayRowState.mark)) ? getColorCompat(R.color.text) : getColorCompat(R.color.text_dim));
                 if (rowStateCarplayRowState != null && rowStateCarplayRowState.done) {
                     textView3.setText("");
                 } else {
@@ -1845,13 +1849,13 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
     private com.carbridge.app.MainActivity.RowState rowState(com.carbridge.app.StepChain.State state) {
         switch (com.carbridge.app.MainActivity.AnonymousClass52.$SwitchMap$com$carbridge$app$StepChain$State[state.ordinal()]) {
             case 1:
-                return new com.carbridge.app.MainActivity.RowState("✓", getColorCompat(2130771984), getString(2131099765), true);
+                return new com.carbridge.app.MainActivity.RowState("✓", getColorCompat(R.color.state_ok), getString(R.string.step_done), true);
             case DEF_FPS /* 2 */:
-                return new com.carbridge.app.MainActivity.RowState("●", getColorCompat(2130771985), getString(2131099764), false);
+                return new com.carbridge.app.MainActivity.RowState("●", getColorCompat(R.color.state_work), getString(R.string.step_active), false);
             case 3:
-                return new com.carbridge.app.MainActivity.RowState("✕", getColorCompat(2130771982), getString(2131099766), false);
+                return new com.carbridge.app.MainActivity.RowState("✕", getColorCompat(R.color.state_err), getString(R.string.step_failed), false);
             default:
-                return new com.carbridge.app.MainActivity.RowState("○", getColorCompat(2130771983), getString(2131099767), false);
+                return new com.carbridge.app.MainActivity.RowState("○", getColorCompat(R.color.state_idle), getString(R.string.step_pending), false);
         }
     }
 
@@ -1913,7 +1917,7 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
 
     /* JADX INFO: Access modifiers changed from: private */
     public int getColorCompat(int i) {
-        return getResources().getColor(i);
+        return getResources().getColor(i, getTheme());
     }
 
     @Override // com.carbridge.app.HuClient.Sink
@@ -1926,7 +1930,7 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
                 MainActivity.this.failedStep = null;
                 MainActivity.this.renderSteps();
                 if (step == com.carbridge.app.HuClient.Step.STREAMING) {
-                    MainActivity.this.setBadge(2131099652, 2130771968);
+                    MainActivity.this.setBadge(R.string.badge_live, R.color.accent);
                     MainActivity.this.maybeAutoCarPlay();
                 }
             }
@@ -1959,10 +1963,10 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
                 MainActivity.this.failedStep = step;
                 MainActivity.this.failedReason = str;
                 MainActivity.this.renderSteps();
-                MainActivity.this.setBadge(2131099766, 2130771982);
+                MainActivity.this.setBadge(R.string.step_failed, R.color.state_err);
                 if (MainActivity.this.detailView != null) {
                     MainActivity.this.detailView.setVisibility(0);
-                    android.view.View viewFindViewById = MainActivity.this.findViewById(2130903056);
+                    android.view.View viewFindViewById = MainActivity.this.findViewById(R.id.detail_divider);
                     if (viewFindViewById != null) {
                         viewFindViewById.setVisibility(0);
                     }
@@ -2016,40 +2020,40 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
         int iDp = dp(20.0f);
         linearLayout.setPadding(iDp, dp(4.0f), iDp, 0);
         android.widget.TextView textView = new android.widget.TextView(this);
-        textView.setText(2131099697);
+        textView.setText(R.string.mac_dialog_msg);
         textView.setTextSize(12.0f);
-        textView.setTextColor(getColorCompat(2130771988));
+        textView.setTextColor(getColorCompat(R.color.text_muted));
         textView.setLineSpacing(dp(2.0f), 1.0f);
         linearLayout.addView(textView);
         android.widget.LinearLayout.LayoutParams layoutParams = new android.widget.LinearLayout.LayoutParams(-1, -2);
         layoutParams.topMargin = dp(12.0f);
         linearLayout.addView(editText, layoutParams);
-        new android.app.AlertDialog.Builder(this).setTitle(2131099699).setView(linearLayout).setPositiveButton(android.R.string.ok, new android.content.DialogInterface.OnClickListener() { // from class: com.carbridge.app.MainActivity.47
+        new android.app.AlertDialog.Builder(this).setTitle(R.string.mac_dialog_title).setView(linearLayout).setPositiveButton(android.R.string.ok, new android.content.DialogInterface.OnClickListener() { // from class: com.carbridge.app.MainActivity.47
 
             @Override // android.content.DialogInterface.OnClickListener
             public void onClick(android.content.DialogInterface dialogInterface, int i) {
                 java.lang.String strTrim = editText.getText().toString().trim();
                 if (strTrim.isEmpty()) {
                     if (com.carbridge.carplay.bt.BtIdentity.manualMac(MainActivity.this) == null) {
-                        android.widget.Toast.makeText(MainActivity.this, 2131099700, 0).show();
+                        android.widget.Toast.makeText(MainActivity.this, R.string.mac_empty, 0).show();
                         return;
                     }
                     com.carbridge.carplay.bt.BtIdentity.setManualMac(MainActivity.this, (java.lang.String) null);
                     MainActivity.this.log("已清除手动填写的蓝牙地址");
-                    android.widget.Toast.makeText(MainActivity.this, 2131099695, 0).show();
+                    android.widget.Toast.makeText(MainActivity.this, R.string.mac_cleared, 0).show();
                     MainActivity.this.refreshIdentity();
                     return;
                 }
                 if (!com.carbridge.carplay.bt.BtIdentity.setManualMac(MainActivity.this, strTrim)) {
-                    android.widget.Toast.makeText(MainActivity.this, 2131099701, 1).show();
+                    android.widget.Toast.makeText(MainActivity.this, R.string.mac_invalid, 1).show();
                     return;
                 }
                 java.lang.String str = com.carbridge.carplay.bt.BtIdentity.peek(MainActivity.this).mac;
                 MainActivity.this.log("本机蓝牙地址已保存：" + str + "（下次连接生效）");
-                android.widget.Toast.makeText(MainActivity.this, MainActivity.this.getString(2131099702, new java.lang.Object[]{str}), 0).show();
+                android.widget.Toast.makeText(MainActivity.this, MainActivity.this.getString(R.string.mac_saved, new java.lang.Object[]{str}), 0).show();
                 MainActivity.this.refreshIdentity();
             }
-        }).setNeutralButton(2131099698, new android.content.DialogInterface.OnClickListener() { // from class: com.carbridge.app.MainActivity.46
+        }).setNeutralButton(R.string.mac_dialog_read, new android.content.DialogInterface.OnClickListener() { // from class: com.carbridge.app.MainActivity.46
             @Override // android.content.DialogInterface.OnClickListener
             public void onClick(android.content.DialogInterface dialogInterface, int i) {
                 com.carbridge.carplay.bt.BtIdentity.Resolved resolvedResolve = com.carbridge.carplay.bt.BtIdentity.resolve(MainActivity.this, true);
@@ -2062,8 +2066,8 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
 
     /* JADX INFO: Access modifiers changed from: private */
     public void showSrcversDialog() {
-        final java.util.ArrayList arrayList = new java.util.ArrayList();
-        java.util.ArrayList arrayList2 = new java.util.ArrayList();
+        final java.util.ArrayList<String> arrayList = new java.util.ArrayList<String>();
+        java.util.ArrayList<String> arrayList2 = new java.util.ArrayList<String>();
         java.lang.String strSrcvers = com.carbridge.carplay.CarPlayCtrlCompat.srcvers(this);
         for (java.lang.String str : com.carbridge.carplay.CarPlayCtrlCompat.PRESETS) {
             arrayList.add(str);
@@ -2073,14 +2077,14 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
         final int size = arrayList.size();
         arrayList.add(null);
         arrayList2.add("    自定义…");
-        new android.app.AlertDialog.Builder(this).setTitle(getString(2131099754) + " · " + strSrcvers).setItems((java.lang.CharSequence[]) arrayList2.toArray(new java.lang.CharSequence[0]), new android.content.DialogInterface.OnClickListener() { // from class: com.carbridge.app.MainActivity.48
+        new android.app.AlertDialog.Builder(this).setTitle(getString(R.string.srcvers_dialog_title) + " · " + strSrcvers).setItems(arrayList2.toArray(new java.lang.CharSequence[0]), new android.content.DialogInterface.OnClickListener() { // from class: com.carbridge.app.MainActivity.48
 
             @Override // android.content.DialogInterface.OnClickListener
             public void onClick(android.content.DialogInterface dialogInterface, int i) {
                 if (i == size) {
                     MainActivity.this.showSrcversCustomDialog();
                 } else {
-                    MainActivity.this.applySrcvers((java.lang.String) arrayList.get(i));
+                    MainActivity.this.applySrcvers(arrayList.get(i));
                 }
             }
         }).setNegativeButton(android.R.string.cancel, (android.content.DialogInterface.OnClickListener) null).show();
@@ -2102,15 +2106,15 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
         int iDp = dp(20.0f);
         linearLayout.setPadding(iDp, dp(4.0f), iDp, 0);
         android.widget.TextView textView = new android.widget.TextView(this);
-        textView.setText(2131099752);
+        textView.setText(R.string.srcvers_custom_hint);
         textView.setTextSize(12.0f);
-        textView.setTextColor(getColorCompat(2130771988));
+        textView.setTextColor(getColorCompat(R.color.text_muted));
         textView.setLineSpacing(dp(2.0f), 1.0f);
         linearLayout.addView(textView);
         android.widget.LinearLayout.LayoutParams layoutParams = new android.widget.LinearLayout.LayoutParams(-1, -2);
         layoutParams.topMargin = dp(12.0f);
         linearLayout.addView(editText, layoutParams);
-        new android.app.AlertDialog.Builder(this).setTitle(2131099753).setView(linearLayout).setPositiveButton(android.R.string.ok, new android.content.DialogInterface.OnClickListener() { // from class: com.carbridge.app.MainActivity.49
+        new android.app.AlertDialog.Builder(this).setTitle(R.string.srcvers_custom_title).setView(linearLayout).setPositiveButton(android.R.string.ok, new android.content.DialogInterface.OnClickListener() { // from class: com.carbridge.app.MainActivity.49
 
             @Override // android.content.DialogInterface.OnClickListener
             public void onClick(android.content.DialogInterface dialogInterface, int i) {
@@ -2118,10 +2122,10 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
                     MainActivity.this.refreshIdentity();
                     java.lang.String strSrcvers2 = com.carbridge.carplay.CarPlayCtrlCompat.srcvers(MainActivity.this);
                     MainActivity.this.log("广播版本 srcvers = " + strSrcvers2 + "（下次连接生效）");
-                    android.widget.Toast.makeText(MainActivity.this, MainActivity.this.getString(2131099749, new java.lang.Object[]{strSrcvers2}), 0).show();
+                    android.widget.Toast.makeText(MainActivity.this, MainActivity.this.getString(R.string.srcvers_changed, new java.lang.Object[]{strSrcvers2}), 0).show();
                     return;
                 }
-                android.widget.Toast.makeText(MainActivity.this, 2131099756, 1).show();
+                android.widget.Toast.makeText(MainActivity.this, R.string.srcvers_invalid, 1).show();
             }
         }).setNegativeButton(android.R.string.cancel, (android.content.DialogInterface.OnClickListener) null).show();
     }
@@ -2129,13 +2133,13 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
     /* JADX INFO: Access modifiers changed from: private */
     public void applySrcvers(java.lang.String str) {
         if (!com.carbridge.carplay.CarPlayCtrlCompat.setValue(this, str)) {
-            android.widget.Toast.makeText(this, 2131099756, 1).show();
+            android.widget.Toast.makeText(this, R.string.srcvers_invalid, 1).show();
             return;
         }
         refreshIdentity();
         java.lang.String strSrcvers = com.carbridge.carplay.CarPlayCtrlCompat.srcvers(this);
         log("广播版本 srcvers = " + strSrcvers + "（下次连接生效）");
-        android.widget.Toast.makeText(this, getString(2131099749, new java.lang.Object[]{strSrcvers}), 0).show();
+        android.widget.Toast.makeText(this, getString(R.string.srcvers_changed, new java.lang.Object[]{strSrcvers}), 0).show();
     }
 
     /* JADX INFO: Access modifiers changed from: private */
@@ -2143,9 +2147,9 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
         if (this.btnConnect == null) {
             return;
         }
-        this.btnConnect.setText(z ? 2131099659 : 2131099656);
-        this.btnConnect.setBackgroundResource(z ? 2130837506 : 2130837508);
-        this.btnConnect.setTextColor(getColorCompat(z ? 2130771982 : 2130771978));
+        this.btnConnect.setText(z ? R.string.btn_disconnect : R.string.btn_connect);
+        this.btnConnect.setBackgroundResource(z ? R.drawable.bg_btn_danger : R.drawable.bg_btn_primary);
+        this.btnConnect.setTextColor(getColorCompat(z ? R.color.state_err : R.color.on_accent));
     }
 
     /* JADX INFO: Access modifiers changed from: private */
@@ -2154,7 +2158,7 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
             return;
         }
         this.badgeView.setText(i);
-        this.badgeView.setTextColor(getColorCompat(2130771978));
+        this.badgeView.setTextColor(getColorCompat(R.color.on_accent));
         this.badgeView.setBackgroundTintList(android.content.res.ColorStateList.valueOf(getColorCompat(i2)));
         this.badgeView.setVisibility(0);
     }
@@ -2186,7 +2190,7 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
             return;
         }
         java.lang.String strFps = com.carbridge.app.MetricsText.fps(this.fpsValue);
-        java.lang.String string = getString(2131099705);
+        java.lang.String string = getString(R.string.metric_placeholder);
         this.metricFps.setText(strFps == null ? string : strFps);
         if (this.client != null) {
             iEncodedWidth = this.client.encodedWidth() > 0 ? this.client.encodedWidth() : this.client.streamWidth();
@@ -2231,7 +2235,7 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
             }
             this.carplayManualStop = true;
             this.autoCarplayArmed = false;
-            this.btnCarPlay.setText(2131099654);
+            this.btnCarPlay.setText(R.string.btn_carplay_start);
             resetCarPlaySteps();
             log("已停止 CarPlay 配对/鉴权");
             return;
@@ -2290,7 +2294,7 @@ public class MainActivity extends android.app.Activity implements com.carbridge.
                 carPlayBridge.connect(str, i);
             }
         });
-        this.btnCarPlay.setText(2131099655);
+        this.btnCarPlay.setText(R.string.btn_carplay_stop);
         log("启动 CarPlay 配对/鉴权（等车机蓝牙回连）");
         this.carPlayTx.start();
     }

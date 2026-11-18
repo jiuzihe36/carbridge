@@ -9,7 +9,7 @@ import android.view.View;
 /**
  * 双向数据流指示器（完全静态，无动画）。
  */
-public class LinkDiagramView extends View {
+public final class LinkDiagramView extends View {
 
     public enum Phase {IDLE, ACTIVE, DONE, ERROR}
 
@@ -26,11 +26,11 @@ public class LinkDiagramView extends View {
 
     public LinkDiagramView(Context context, AttributeSet attrs) {
         super(context, attrs);
-        cIdle = context.getResources().getColor(R.color.state_idle);
+        cIdle = context.getResources().getColor(R.color.state_idle, context.getTheme());
         // 深色 tile 上进行中用亮蓝 #2997FF（深底上 #0066CC 几乎看不见）
-        cActive = context.getResources().getColor(R.color.tile_blue);
-        cOk = context.getResources().getColor(R.color.state_ok);
-        cErr = context.getResources().getColor(R.color.state_err);
+        cActive = context.getResources().getColor(R.color.tile_blue, context.getTheme());
+        cOk = context.getResources().getColor(R.color.state_ok, context.getTheme());
+        cErr = context.getResources().getColor(R.color.state_err, context.getTheme());
 
         linePaint.setStyle(Paint.Style.STROKE);
         linePaint.setStrokeWidth(dp(2f));

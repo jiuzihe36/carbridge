@@ -287,15 +287,14 @@ public final class SdpBeaconService extends Service {
 
         Notification.Builder b = (Build.VERSION.SDK_INT >= 26)
                 ? new Notification.Builder(this, CHANNEL_ID)
-                : new Notification.Builder(this);
+                : new Notification.Builder(this, CHANNEL_ID);
         b.setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
                 .setContentTitle(getString(R.string.app_name))
                 .setContentText(CarPlaySdpBeacon.isStarted()
                         ? "CarPlay 认证信标运行中"
                         : "CarPlay 认证信标未就绪")
                 .setContentIntent(pi)
-                .setOngoing(true)
-                .setPriority(Notification.PRIORITY_MIN);
+                .setOngoing(true);
         return b.build();
     }
 }

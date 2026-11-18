@@ -133,6 +133,7 @@ public final class BtDiag {
 
         log.onLog("── 强制重查 SDP：fetchUuidsWithSdp() ──");        final BroadcastReceiver receiver = new BroadcastReceiver() {
             @Override
+            @SuppressWarnings("deprecation")   // minSdk 26：带 Class 的重载要 API 33
             public void onReceive(Context c, Intent i) {
                 BluetoothDevice d = i.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
                 Parcelable[] raw = i.getParcelableArrayExtra(BluetoothDevice.EXTRA_UUID);

@@ -121,10 +121,6 @@ public final class BtIap2Server {
         active = null;
     }
 
-    /**
-     * 当前 iAP2 会话结束（链路断开 / iAP2 失败）时由发送端调用。
-     * 清掉“已占用”标记，允许下一轮入站或出站连接。
-     */
     /** 发送端每收到车机字节就调用一次（只用于判断会话是否真的在跑）。 */
     public void notifyRx() {
         sessionReceivedBytes = true;

@@ -191,6 +191,7 @@ public final class BtEirSniffer {
 
     // ================================================================== 收到发现结果
 
+    @SuppressWarnings("deprecation")   // minSdk 26：带 Class 的 getParcelableExtra 需要 API 33
     private void onFound(Intent intent) {
         if (intent == null) return;
         BluetoothDevice device = null;

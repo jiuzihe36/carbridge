@@ -73,9 +73,9 @@ public class GuideWizardActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_guide);
 
-        dots[0] = (View) findViewById(R.id.dot_step1);
-        dots[1] = (View) findViewById(R.id.dot_step2);
-        dots[2] = (View) findViewById(R.id.dot_step3);
+        dots[0] = findViewById(R.id.dot_step1);
+        dots[1] = findViewById(R.id.dot_step2);
+        dots[2] = findViewById(R.id.dot_step3);
         stateTexts[0] = (TextView) findViewById(R.id.state_step1);
         stateTexts[1] = (TextView) findViewById(R.id.state_step2);
         stateTexts[2] = (TextView) findViewById(R.id.state_step3);

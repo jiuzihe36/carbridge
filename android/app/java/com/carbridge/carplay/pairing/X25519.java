@@ -37,9 +37,9 @@ public final class X25519 {
     /** clamp：RFC 7748 §5。 */
     public static byte[] clamp(byte[] k) {
         byte[] c = k.clone();
-        c[0] &= 248;
-        c[31] &= 127;
-        c[31] |= 64;
+        c[0] = (byte) (c[0] & 248);   // RFC 钳位：清零低 3 位
+        c[31] = (byte) (c[31] & 127); // RFC 钳位：清最高位
+        c[31] = (byte) (c[31] | 64);  // RFC 钳位：置第二高位
         return c;
     }
 
