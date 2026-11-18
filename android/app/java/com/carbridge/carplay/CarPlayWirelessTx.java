@@ -1023,6 +1023,12 @@ public final class CarPlayWirelessTx {
      * @return true = 已开始采集；false = 车机没有 telephony 流，调用方应退回 HFP
      */
     private boolean startTelephonyUplink() {
+        // HFP 连上了就别再走 telephony：那条是「车机不给 HFP」时的备胎，
+        // 两路一起送会让车机放两遍（回声）。SCO 本身就会让手机端静音。
+        if (com.carbridge.carplay.audio.CarAudioRouter.isHfpConnected()) {
+            log("通话音频：HFP 已连上车机 → 通话音频整路走 SCO（手机端自动静音，不开 telephony 流）");
+            return true;
+        }
         com.carbridge.carplay.core.AirPlaySession ap = airPlaySession();
         if (ap == null || !ap.hasTelephonyStream()) {
             log("通话音频：车机没有 telephony 音频流（/info 未声明 100/telephony）");

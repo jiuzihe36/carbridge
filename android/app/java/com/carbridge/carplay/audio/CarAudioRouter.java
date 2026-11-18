@@ -511,6 +511,20 @@ public final class CarAudioRouter {
     }
 
 
+
+    /** 车机的 HFP 是否真的连上了（连上就意味着通话音频走 SCO，手机侧自动静音）。 */
+    public static boolean isHfpConnected() {
+        try {
+            BluetoothHeadset hs = headsetProxy;
+            if (hs == null) return false;
+            java.util.List<BluetoothDevice> devs = hs.getConnectedDevices();
+            return devs != null && !devs.isEmpty();
+        } catch (Throwable t) {
+            com.carbridge.carplay.util.Diag.w("CarAudioRouter.isHfp", t);
+            return false;
+        }
+    }
+
     /** 被压掉之前的通话音量（-1 = 没压过）。 */
     private static int savedVoiceVolume = -1;
 
@@ -529,12 +543,25 @@ public final class CarAudioRouter {
                 if (savedVoiceVolume < 0) {
                     savedVoiceVolume = am.getStreamVolume(AudioManager.STREAM_VOICE_CALL);
                 }
+                // 优先用 ADJUST_MUTE：它走的是「静音开关」，比 setStreamVolume(0) 更可能真的静音
+                // （很多机型把音量设 0 只是压到最小档，仍然出声）。
+                am.adjustStreamVolume(AudioManager.STREAM_VOICE_CALL, AudioManager.ADJUST_MUTE, 0);
                 am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, 0, 0);
-                emit(log, "通话音频：已压掉本机通话音量（原 " + savedVoiceVolume + "）→ 声音只走车机");
+                int now = am.getStreamVolume(AudioManager.STREAM_VOICE_CALL);
+                boolean mu = am.isStreamMute(AudioManager.STREAM_VOICE_CALL);
+                emit(log, "通话音频：已请求静音本机通话（原音量 " + savedVoiceVolume
+                        + "，现在 volume=" + now + " muted=" + mu + "）");
+                if (now > 0 || !mu) {
+                    emit(log, "通话音频：⚠ 系统没有真的静音（音量 " + now + "/mute=" + mu
+                            + "）—— 通话声音量往往被系统保护，只能靠 HFP 把音频整路交出去");
+                }
             } else {
+                am.adjustStreamVolume(AudioManager.STREAM_VOICE_CALL, AudioManager.ADJUST_UNMUTE, 0);
                 if (savedVoiceVolume >= 0) {
                     am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, savedVoiceVolume, 0);
-                    emit(log, "通话音频：已恢复本机通话音量 " + savedVoiceVolume);
+                    emit(log, "通话音频：已恢复本机通话（volume="
+                            + am.getStreamVolume(AudioManager.STREAM_VOICE_CALL)
+                            + "，原 " + savedVoiceVolume + "）");
                     savedVoiceVolume = -1;
                 }
             }
