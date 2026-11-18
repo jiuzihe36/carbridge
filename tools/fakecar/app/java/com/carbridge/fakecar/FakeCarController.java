@@ -102,6 +102,17 @@ public final class FakeCarController {
         List<BluetoothDevice> bonded = conn.bondedDevices();
         emit("已配对设备 " + bonded.size() + " 台：");
         for (BluetoothDevice d : bonded) emit("  · " + conn.describe(d));
+        // 第一轮：只用**缓存的** UUID 判断，毫秒级。
+        // 以前上来就对每台已配对设备做一次 fetchUuidsWithSdp（每台最多 5 秒），
+        // 配了音箱/耳机/键盘的用户点一下要等 40 秒以上，表现就是「点了没反应/假死」。
+        for (BluetoothDevice d : bonded) {
+            if (hasCarPlayUuidCached(d)) {
+                emit("✓ 缓存里就带 2d8d2466：" + conn.describe(d) + "（免去 SDP 扫描）");
+                return d;
+            }
+        }
+        emit("缓存里没有命中，再逐台刷 SDP（较慢，每台最多 5 秒）");
+
         for (BluetoothDevice d : bonded) {
             emit("查 " + conn.describe(d) + " 的 SDP…");
             if (conn.isCarPlayDevice(d, 5000, new BtCarConnector.Log() {
@@ -122,9 +133,37 @@ public final class FakeCarController {
         return null;
     }
 
+
+    /** 设备缓存的 SDP 里是否已经带 CarPlay 的 UUID（不触发网络/SDP 请求）。 */
+    private static boolean hasCarPlayUuidCached(BluetoothDevice d) {
+        try {
+            android.os.ParcelUuid[] uuids = d.getUuids();
+            if (uuids == null) return false;
+            for (android.os.ParcelUuid u : uuids) {
+                if (u == null || u.getUuid() == null) continue;
+                String s = u.getUuid().toString().toLowerCase(java.util.Locale.US);
+                if (s.startsWith("2d8d2466")) return true;
+            }
+        } catch (Throwable t) {
+            android.util.Log.w("fakecar", "读缓存 UUID 失败", t);
+        }
+        return false;
+    }
+
     /** 启动整条链路。 */
     public synchronized void start(final BluetoothDevice device) {
-        if (started) return;
+        if (started) {
+            // 上一轮会话如果还活着，就不重复起（避免抢同一条 RFCOMM）。
+            // 已经死了却仍留着 started=true 的话，点「自动找手机并连接」会**毫无反应** ——
+            // 现场表现就是「假死，必须关掉整个假车机重开」。
+            Iap2AccessorySession cur = session;
+            if (cur != null && cur.isAlive()) {
+                emit("会话仍在运行，忽略本次启动请求");
+                return;
+            }
+            emit("上一轮会话已失效 → 先清理再重连");
+            stop();
+        }
         started = true;
         this.target = device;
 
@@ -297,7 +336,10 @@ public final class FakeCarController {
                         }
                     });
                     if (s == null) {
-                        emit("✗ iAP2 重连失败（下次断开会再试）");
+                        // 重连不上就彻底回到「未启动」，让按钮能重新发起一轮；
+                        // 否则 started 一直为 true，点按钮毫无反应（现场=假死）。
+                        emit("✗ iAP2 重连失败 → 已回到待机，可再次点「自动找手机并连接」");
+                        stop();
                         return;
                     }
                     btSocket = s;

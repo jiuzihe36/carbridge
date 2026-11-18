@@ -48,7 +48,7 @@
     <string name="btn_relaunch">重开通道</string>
     <string name="btn_guide">Car+ 连接引导</string>
     <string name="btn_carplay_start">配对车机</string>
-    <string name="btn_carplay_stop">取消配对</string>
+    <string name="btn_carplay_stop">停止配对</string>
 
     <string name="hint_manual">Car+ 没把 CarLife 通道打开。请在「如何连接」里点「连接诊断」检查权限，或重新打开 Car+ 后再试。</string>
     <string name="hint">App 启动会先做 CarPlay 配对/鉴权，让车机认出本机是 iPhone；Car+ 推流仍按原来的流程自动运行，不需要等鉴权完成。</string>
@@ -62,7 +62,7 @@
     <string name="selfcheck_btn">连接诊断</string>
     <string name="selfcheck_done">自检完成，结果已写入「运行日志」</string>
     <string name="autostart_btn">后台运行</string>
-    <string name="guide_desc">真 iPhone 靠车机自动识别，零触发。打开本 App 后一切自动。\n\n【上车前】\n① 打开本 App，确认「运行日志」里有「✓ CarPlay SDP 信标已注册」\n② 看「本机身份」：蓝牙地址不能是「未获取」—— 是的话填一次（车机蓝牙列表里能看到本机地址）\n③ 点「连接诊断」，确认信标正常\n④ 点「后台运行」，允许后台运行 + 自启动\n\n【第一次配对】（关键，只做一次）\n⑤ 车机蓝牙：删除本机的旧配对记录\n⑥ 手机蓝牙：删除车机的旧配对记录\n⑦ 车机熄火重启一次（清掉车机的旧设备缓存，最稳）\n⑧ 车机重新搜索 → 配对（⚠️ 本 App 必须开着）\n⑨ 车机桌面 → 点「Apple CarPlay」图标（车机不会自己弹出来）\n\n【之后每次】\n打开本 App → 上车 → 车机桌面点「Apple CarPlay」。\n\n点了图标没反应？\n先等 20 秒再点一次（车机第一次要先查一遍手机暴露的蓝牙服务，查完才会认）。\n还是没反应：说明车机配对那一刻没读到信标。删除双方配对，确认 App 显示「信标正常」后重新配对一次。\n\n【车机源码里查到的三条硬条件】\n① 点 CarPlay 前，车机的「车载热点 / Wi-Fi 热点」必须是开着的——没开它只弹一句提示，根本不发起连接\n② 车机蓝牙里若还连着别的设备，新的配对请求会被它直接拒绝（源码：preConnectedDevices 非空就 setPairingConfirmation(false)）\n③ 车机连上无线 CarPlay 后会主动关掉自己的蓝牙，断开后再开回来——这期间本 App 显示「蓝牙已关闭」是正常现象\n\n仍然不行：看「运行日志」里有没有「车机 ctrl 邀请」。没有 = 车机没匹配上本机蓝牙地址，回到第 ② 步核对。</string>
+    <string name="guide_desc">真 iPhone 靠车机自动识别，零触发。打开本 App 后一切自动。\n\n【上车前】\n① 打开本 App，确认「运行日志」里有「✓ CarPlay SDP 信标已注册」\n② 看「本机身份」：蓝牙地址不能是「未获取」—— 是的话填一次（手机「设置 → 蓝牙 → 本机」里能看到）\n③ 点「连接诊断」，确认信标正常\n④ 点「后台运行」，允许后台运行 + 自启动\n\n【第一次配对】（关键，只做一次）\n⑤ 车机蓝牙：删除本机的旧配对记录\n⑥ 手机蓝牙：删除车机的旧配对记录\n⑦ 车机熄火重启一次（清掉车机的旧设备缓存，最稳）\n⑧ 配对（⚠️ 本 App 必须开着）：可从车机搜本机，也可从「手机设置 → 蓝牙」搜车机\n⑨ 车机桌面 → 点「Apple CarPlay」图标（车机不会自己弹出来）\n\n【之后每次】\n打开本 App → 上车 → 车机桌面点「Apple CarPlay」。\n\n点了图标没反应？\n先等 20 秒再点一次（车机第一次要先查一遍手机暴露的蓝牙服务，查完才会认）。\n还是没反应：说明车机配对那一刻没读到信标。删除双方配对，确认 App 显示「信标正常」后重新配对一次。\n\n【车机源码里查到的三条硬条件】\n① 点 CarPlay 前，车机的「车载热点 / Wi-Fi 热点」必须是开着的——没开它只弹一句提示，根本不发起连接\n② 车机蓝牙里若还连着别的设备，新的配对请求会被它直接拒绝（源码：preConnectedDevices 非空就 setPairingConfirmation(false)）\n③ 车机连上无线 CarPlay 后会主动关掉自己的蓝牙，断开后再开回来——这期间本 App 显示「蓝牙已关闭」是正常现象\n\n仍然不行：看「运行日志」里有没有「车机 ctrl 邀请」。没有 = 车机没匹配上本机蓝牙地址，回到第 ② 步核对。</string>
     <string name="quality_title">画质</string>
     <string name="quality_subtitle">投屏到车机的编码参数</string>
     <string name="quality_auto_fit">自动适配车机画布</string>
@@ -158,7 +158,7 @@
     <string name="guide_step1_body">现在：把手机蓝牙打开，并保持开启（下拉通知栏点蓝牙图标即可）。</string>
     <string name="guide_step2_title">第 2 步 · 与车机配对</string>
     <string name="guide_status_pending2">未完成</string>
-    <string name="guide_step2_body">现在：在车机蓝牙列表里找到本机并配对 —— 配对全程别关这个 App，车机就是在这一刻查信标的。</string>
+    <string name="guide_step2_body">现在：配对手机与车机。任选一边都行 ——「车机蓝牙列表里找本机」或「手机设置 → 蓝牙里搜车机」。\n注意：Android 14 起应用无法把手机设为可被发现，所以车机列表里看不到本机是正常的，改从手机那边搜即可。配对全程别关这个 App。</string>
     <string name="guide_step3_title">第 3 步 · 车机点 CarPlay</string>
     <string name="guide_step3_body">现在：到车机桌面点「Apple CarPlay」图标 —— 车机不会自己弹，第一次可能要等 20 秒再点一次。</string>
     <string name="guide_trouble_hint">配对一直转圈？把车机里本机的旧记录、手机里车机的旧记录都删掉，再配一次。车机若还连着别的蓝牙设备，会直接拒绝新的配对。</string>

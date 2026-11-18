@@ -118,6 +118,11 @@ public final class Iap2AccessorySession {
     private final Config cfg;
 
     private volatile boolean running;
+
+    /** 会话是否还活着（用于判断「上一轮是不是已经死了，可以重来」）。 */
+    public boolean isAlive() {
+        return running;
+    }
     private Thread readThread;
     /** 会话结束（对端断开/读失败）时回调；用于自动重连。 */
     private volatile Runnable onClosed;

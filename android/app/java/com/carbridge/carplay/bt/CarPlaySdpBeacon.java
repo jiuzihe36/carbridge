@@ -113,6 +113,8 @@ public final class CarPlaySdpBeacon {
      * @param seconds 可被发现的时间窗
      * @return true = 成功
      */
+    private static boolean discoverableHinted;
+
     public static boolean setDiscoverable(int seconds) {
         try {
             android.bluetooth.BluetoothAdapter adapter =
@@ -123,7 +125,15 @@ public final class CarPlaySdpBeacon {
             m.invoke(adapter, seconds, null);
             return true;
         } catch (Throwable t) {
-            android.util.Log.i("carbridge", "setDiscoverable 失败: " + t);
+            // Android 14+ 这个方法已被整个删除。真机上用户会看到「车机蓝牙列表里找不到本机」，
+            // 所以这里必须给一句能照做的话，而不是只留一个异常。
+            if (!discoverableHinted) {
+                discoverableHinted = true;
+                android.util.Log.i("carbridge", "setDiscoverable 失败: " + t);
+                android.util.Log.i("carbridge",
+                        "提示：Android 14+ 起应用无法把手机设为可被发现 → 请改从「手机设置 → 蓝牙」"
+                                + "搜索车机并配对（已配对的设备不受影响）");
+            }
             return false;
         }
     }
