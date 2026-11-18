@@ -914,9 +914,30 @@ public final class CarPlayWirelessTx {
         onCarPlayEndpoint(e.host, e.port);
     }
 
-        /**
-     * AirPlay 会话挂了（车机关了连接 / 心跳断了 / 密文流被打乱）。
-     */
+    /** 连续失败后的等待：0 / 2s / 5s / 10s / 20s 封顶。 */
+    private static long backoffMs(int streak) {
+        switch (streak) {
+            case 0:
+            case 1: return 0;
+            case 2: return 2000;
+            case 3: return 5000;
+            case 4: return 10000;
+            default: return 20000;
+        }
+    }
+
+    private void requestEndpointAgain() {
+        Iap2SenderSession s = iap2;
+        if (s == null) return;
+        try {
+            log("向车机重新请求热点配置/端点（0x5702）");
+            s.requestWifiConfiguration();
+        } catch (Throwable t) {
+            log("重新请求端点失败: " + t);
+        }
+    }
+
+    /** AirPlay 会话挂了（车机关了连接 / 心跳断了 / 密文流被打乱）。 */
     public void onAirPlaySessionFailed(String reason) {
         airplaySessionActive = false;
         if (state != State.AIRPLAY) return;
@@ -927,11 +948,17 @@ public final class CarPlayWirelessTx {
         // 0x5702 → 车机 0x5703 → 我们 0x4300 → 车机 0x4301，比干等 mDNS 快得多。
         Iap2SenderSession s = iap2;
         if (s != null) {
-            try {
-                log("向车机重新请求热点配置/端点（0x5702）");
-                s.requestWifiConfiguration();
-            } catch (Throwable t) {
-                log("重新请求端点失败: " + t);
+            airplayFailStreak++;
+            long delay = backoffMs(airplayFailStreak);
+            if (delay > 0) {
+                log("AirPlay 连续失败 " + airplayFailStreak + " 次 → 等 " + delay + "ms 再要端点（别追着车机打）");
+                main.postDelayed(new Runnable() {
+                    @Override public void run() {
+                        requestEndpointAgain();
+                    }
+                }, delay);
+            } else {
+                requestEndpointAgain();
             }
         } else {
             // iAP2 已经断了：没有 0x5702 可发、也拿不到 0x4301 端点。
@@ -1066,6 +1093,14 @@ public final class CarPlayWirelessTx {
         return com.carbridge.carplay.core.AirPlaySession.current();
     }
 
+    /**
+     * 连续 AirPlay 失败次数：用于退避。
+     *
+     * <p>车机在抖动（车机自己重启 / 网络顿一下）时会连着失败好几次；
+     * 每次都立刻发 0x5702 重新要端点，等于追着车机打，反而拖长它恢复的时间。
+     */
+    private int airplayFailStreak;
+
     /** 上一次通话状态：用于去重（同一次通话会被回调多次）。 */
     private boolean callStateKnown;
     private boolean lastCallState;
@@ -1153,6 +1188,7 @@ public final class CarPlayWirelessTx {
      */
     public void markStreaming() {
         enterStep(Step.CARPLAY_STREAM);
+        airplayFailStreak = 0;      // 推流成功 → 退避清零
         startCallWatcher();
     }
 
