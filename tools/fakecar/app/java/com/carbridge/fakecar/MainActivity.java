@@ -166,6 +166,15 @@ public final class MainActivity extends Activity {
         log("本机(LAN) IP: " + FakeCarController.detectLanIp());
         log("本机蓝牙 MAC: " + FakeCarController.detectBtMac());
         log("目标手机先和本机蓝牙配对，再点「自动找手机并连接」");
+        // 自动化用：adb shell am start -n com.carbridge.fakecar/.MainActivity --ez autoconnect true
+        // 冒烟测试要把「点按钮」这一步也自动化，否则每次都要人手点。
+        if (getIntent() != null && getIntent().getBooleanExtra("autoconnect", false)) {
+            main.postDelayed(new Runnable() {
+                @Override public void run() {
+                    if (btnAuto != null) btnAuto.performClick();
+                }
+            }, 800);
+        }
         log("屏幕流会自动渲染到上方画面，直接点画面即可触摸回传手机");
     }
 

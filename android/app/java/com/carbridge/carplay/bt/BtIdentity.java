@@ -158,22 +158,7 @@ public final class BtIdentity {
      * 拒绝占位值、全 0/全 F、组播位与本地管理位（手填填错一个字符就会让车机永远不邀请）。
      */
     public static String normalize(String input) {
-        if (input == null) return null;
-        String hex = input.trim().replaceAll("[:\\-\\s.]", "");
-        if (!hex.matches("[0-9A-Fa-f]{12}")) return null;
-        String mac = hex.toUpperCase();
-        StringBuilder sb = new StringBuilder(17);
-        for (int i = 0; i < 12; i += 2) {
-            if (i > 0) sb.append(':');
-            sb.append(mac, i, i + 2);
-        }
-        String out = sb.toString();
-        if (out.equals("00:00:00:00:00:00") || out.equals("FF:FF:FF:FF:FF:FF")) return null;
-        if (out.equalsIgnoreCase(PLACEHOLDER_MAC)) return null;
-        int first = Integer.parseInt(out.substring(0, 2), 16);
-        if ((first & 0x01) != 0) return null;   // 组播位
-        if ((first & 0x02) != 0) return null;   // 本地管理位（占位值就长这样）
-        return out;
+        return com.carbridge.carplay.util.MacText.canonicalStrict(input);
     }
 
     // ---------------------------------------------------------------- 内部

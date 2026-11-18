@@ -118,43 +118,18 @@ public final class WifiMacResolver {
 
     /** 文本里第一个可用的 MAC（拒绝全 0、全 F、组播位、系统占位）。 */
     static String parse(String text) {
-        if (text == null) return null;
-        Matcher m = MAC.matcher(text);
-        if (!m.find()) return null;
-        String[] parts = m.group().split(":");
-        byte[] b = new byte[6];
-        for (int i = 0; i < 6; i++) b[i] = (byte) Integer.parseInt(parts[i], 16);
-        return format(b);
+        String mac = com.carbridge.carplay.util.MacText.firstIn(text);
+        return mac == null ? null : mac.toLowerCase(java.util.Locale.US);
     }
 
     static String format(byte[] bytes) {
-        if (bytes == null || bytes.length != 6) return null;
-        boolean allZero = true;
-        boolean allFf = true;
-        for (byte x : bytes) {
-            int v = x & 0xFF;
-            if (v != 0) allZero = false;
-            if (v != 0xFF) allFf = false;
-        }
-        if (allZero || allFf) return null;
-        if ((bytes[0] & 0x01) != 0) return null;   // 组播
-        StringBuilder sb = new StringBuilder(17);
-        for (int i = 0; i < 6; i++) {
-            if (i > 0) sb.append(':');
-            sb.append(String.format(java.util.Locale.US, "%02x", bytes[i] & 0xFF));
-        }
-        String mac = sb.toString();
-        return "02:00:00:00:00:00".equals(mac) ? null : mac;
+        String mac = com.carbridge.carplay.util.MacText.fromBytes(bytes);
+        return mac == null ? null : mac.toLowerCase(java.util.Locale.US);
     }
 
     /** fe80::xxxx:xxff:fexx:xxxx → MAC（翻转 U/L 位）；随机接口标识的地址返回 null。 */
     static String fromEui64(InetAddress address) {
-        if (!(address instanceof Inet6Address)) return null;
-        byte[] b = address.getAddress();
-        if ((b[0] & 0xFF) != 0xFE || (b[1] & 0xC0) != 0x80) return null;
-        if ((b[11] & 0xFF) != 0xFF || (b[12] & 0xFF) != 0xFE) return null;
-        return format(new byte[]{
-                (byte) (b[8] ^ 0x02), b[9], b[10], b[13], b[14], b[15]
-        });
+        String mac = com.carbridge.carplay.util.MacText.fromEui64(address);
+        return mac == null ? null : mac.toLowerCase(java.util.Locale.US);
     }
 }

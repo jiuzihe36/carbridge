@@ -16,6 +16,7 @@
 | 日志的内存/文件上限、裁剪策略 | `app/SessionLog.java` | `MainActivity.log()`（它只做转发） |
 | 蓝牙 SDP 信标（四条记录、监听） | `carplay/bt/CarPlaySdpBeacon.java` | — |
 | 蓝牙地址从哪来（getAddress/settings/root/手填） | `carplay/bt/BtIdentity.java` | — |
+| MAC 文本规范化/校验（含严格 vs 宽松两种强度） | `carplay/util/MacText.java` | 别在别处再写一套 |
 | iAP2 报文顺序、0x5703/0x4300/0x4301 | `carplay/iap2/Iap2SenderSession.java` | `Iap2LinkPacket`（链路层） |
 | iAP2 链路层（FF5A 头、seq/ack、校验和） | `carplay/iap2/Iap2LinkPacket.java` | `Iap2SenderSession`（业务层） |
 | MFi 认证（证书解析、挑战、验签） | `carplay/iap2/MfiCrypto.java` + `Iap2SenderSession.onAuthResponse` | — |
@@ -62,6 +63,10 @@ cd tools/fakecar-jvm && ./build.sh && ./run.sh
 # 3. 出包 + 装机
 cd ~/carbridge && export JAVA_HOME=~/项目/资料/toolchain/jdk-current/Contents/Home && ./android/build.sh
 adb -t <transport_id> install -r android/build/carbridge-0.1.0.apk
+
+# 4. 端到端冒烟（装机 → 起假车机 → 自动连 → 断言五条关键日志）
+./tools/smoke.sh                 # 全流程
+SKIP_BUILD=1 SKIP_INSTALL=1 ./tools/smoke.sh   # 只跑链路
 ```
 
 改协议/认证 → 必须跑 1 和 2；只改界面 → 跑 1 即可。
