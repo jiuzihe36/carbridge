@@ -1583,6 +1583,8 @@ public final class AirPlaySession {
     /** 视频转发耗时统计（每 5 秒一条）：区分「app 转发慢」还是「上游/网络慢」。 */
     private long vidCount, vidSumNanos, vidMaxNanos, vidLastLogMs, vidLastArriveNanos;
     private long vidGapSumNanos, vidGapMaxNanos, vidGapCount;
+    /** 1 秒滑动桶里最多收到多少帧 —— 用来区分「内容静止所以帧少」和「上游被限速」。 */
+    private long vidSecStartMs, vidSecCount, vidSecMax;
 
     private void trackVideoLatency(long nanos) {
         long nowNs = System.nanoTime();
@@ -1593,6 +1595,15 @@ public final class AirPlaySession {
             vidGapCount++;
         }
         vidLastArriveNanos = nowNs;
+        long nowMsSec = System.currentTimeMillis();
+        if (vidSecStartMs == 0) {
+            vidSecStartMs = nowMsSec;
+        } else if (nowMsSec - vidSecStartMs >= 1000) {
+            vidSecMax = Math.max(vidSecMax, vidSecCount);
+            vidSecStartMs = nowMsSec;
+            vidSecCount = 0;
+        }
+        vidSecCount++;
         vidCount++;
         vidSumNanos += nanos;
         vidMaxNanos = Math.max(vidMaxNanos, nanos);
@@ -1603,13 +1614,14 @@ public final class AirPlaySession {
         }
         if (nowMs - vidLastLogMs >= 5000 && vidCount > 0) {
             log(String.format(java.util.Locale.US,
-                    "视频转发 %.2fms/帧（峰 %.2fms）· 帧间隔 %.1fms（峰 %.1fms）· %d 帧/5s",
+                    "视频转发 %.2fms/帧（峰 %.2fms）· 帧间隔 %.1fms（峰 %.1fms）· %d 帧/5s · 峰值 %d 帧/秒",
                     vidSumNanos / 1e6 / vidCount, vidMaxNanos / 1e6,
                     vidGapCount > 0 ? vidGapSumNanos / 1e6 / vidGapCount : 0,
-                    vidGapMaxNanos / 1e6, vidCount));
+                    vidGapMaxNanos / 1e6, vidCount, vidSecMax));
             vidLastLogMs = nowMs;
             vidCount = vidSumNanos = vidMaxNanos = 0;
             vidGapSumNanos = vidGapMaxNanos = vidGapCount = 0;
+            vidSecMax = 0;
         }
     }
 
