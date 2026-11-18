@@ -1658,6 +1658,7 @@ public final class AirPlaySession {
 
     // ================================================================== 事件通道
 
+
     private void eventLoop(Socket s) {
         try {
             // 有读密钥就先解密再当明文解析（半帧由 DecryptedStream/ControlCipher 缓冲）
@@ -1767,6 +1768,9 @@ public final class AirPlaySession {
                                     + "B（累计 " + typeCount + " 条）");
                         }
                         if ("hidSendReport".equals(type)) {
+                            // 事件线程只解析 + 投递：真正的 socket 写发生在
+                            // HuClient.sendTouch 的触摸线程里（见那边的注释），
+                            // 所以这里不会阻塞后续 /command 的应答。
                             handleHid(m);
                         } else if ("changeModes".equals(type)) {
                             sendModesChanged();
