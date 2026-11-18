@@ -93,6 +93,21 @@ public final class Iap2AccessorySession {
     private static final int MSG_AUTH_CERT = 0xAA01;
     private static final int MSG_AUTH_CHALLENGE = 0xAA02;
     private static final int MSG_AUTH_RESPONSE = 0xAA03;
+    /** MFi 用的 RSA-1024 密钥对：懒加载，整个进程复用（每轮重连都换会让人以为是不同设备）。 */
+    private static java.security.KeyPair RSA_KEYS;
+
+    private static synchronized java.security.KeyPair rsa() {
+        if (RSA_KEYS == null) {
+            try {
+                java.security.KeyPairGenerator g = java.security.KeyPairGenerator.getInstance("RSA");
+                g.initialize(1024);
+                RSA_KEYS = g.generateKeyPair();
+            } catch (Exception e) {
+                throw new IllegalStateException("RSA 密钥生成失败", e);
+            }
+        }
+        return RSA_KEYS;
+    }
     private static final int MSG_AUTH_SUCCEEDED = 0xAA05;
     private static final int MSG_REQ_WIFI_CFG = 0x5702;
     private static final int MSG_ACC_WIFI_CFG = 0x5703;
@@ -371,8 +386,16 @@ public final class Iap2AccessorySession {
             case MSG_REQ_AUTH_CERT:
                 if (certSent) break;
                 certSent = true;
-                txCsm(MSG_AUTH_CERT, Iap2Csm.param(0, repeat((byte) 0x04, 64)),
-                        "0xAA01 占位证书 64B");
+                // 发**真的** RSA-1024 公钥（SPKI DER），而不是 64 个 0x04 占位。
+                // 手机侧会解析出公钥并做「签名形状/验签」检查；占位证书会让它报
+                // 「签名形状不符」——测试环境里那条警告就是这么来的。
+                try {
+                    byte[] spki = rsa().getPublic().getEncoded();
+                    txCsm(MSG_AUTH_CERT, Iap2Csm.param(0, spki),
+                            "0xAA01 RSA-1024 公钥 " + spki.length + "B（可被解析）");
+                } catch (Throwable t) {
+                    emit("0xAA01 公钥发送失败：" + t);
+                }
                 // ⚠️ 真车（CHERY/Tiggo，mcarplay 艾瑞泽 8 记录）是**车机先发 32 字节挑战**，
                 //    手机回 128B 签名，车机再回 0xAA05。以前这里是纯被动回应，方向反了。
                 {
@@ -391,11 +414,19 @@ public final class Iap2AccessorySession {
                 break;
             }
             case MSG_AUTH_CHALLENGE: {
-                int clen = ps.isEmpty() ? 0 : ps.get(0).value.length;
-                byte[] sig = new byte[72];
-                for (int i = 0; i < 72; i++) sig[i] = (byte) i;
+                byte[] challenge = ps.isEmpty() ? new byte[0] : ps.get(0).value;
+                byte[] sig;
+                try {
+                    java.security.Signature sign = java.security.Signature.getInstance("SHA1withRSA");
+                    sign.initSign(rsa().getPrivate());
+                    sign.update(challenge);
+                    sig = sign.sign();       // RSA-1024 → 128B，形状与内容都合规
+                } catch (Throwable t) {
+                    emit("0xAA03 签名失败：" + t);
+                    sig = new byte[128];
+                }
                 txCsm(MSG_AUTH_RESPONSE, Iap2Csm.param(0, sig),
-                        "0xAA03 假签名（挑战=" + clen + "B）");
+                        "0xAA03 真签名 " + sig.length + "B（挑战=" + challenge.length + "B）");
                 break;
             }
             case MSG_AUTH_SUCCEEDED:
