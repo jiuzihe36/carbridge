@@ -275,6 +275,7 @@ public final class CarPlayWirelessTx {
     }
 
     public void stop() {
+        stopCallWatcher();
         setState(State.IDLE);
         main.removeCallbacks(wifiTimeout);
         main.removeCallbacks(wifiTimeoutFinal);
@@ -1010,6 +1011,9 @@ public final class CarPlayWirelessTx {
     }
 
     private com.carbridge.carplay.audio.CarAudioRouter.Log audioLogAdapter;
+    /** 直接监听系统音频模式来判断通话（Car+ 有时不上报）。 */
+    private com.carbridge.carplay.audio.PhoneCallWatcher callWatcher;
+
     /** 通话音频采集（走 AirPlay telephony 流）。 */
     private com.carbridge.carplay.audio.CallAudioCapture callCapture;
 
@@ -1039,6 +1043,8 @@ public final class CarPlayWirelessTx {
         }
         log("通话音频：走 AirPlay telephony 流（真 iPhone 的方式）");
         callCapture.start(ctx);
+        // 系统仍然会把通话声从听筒放出来，一并压掉，否则「车机和手机同时出声」
+        com.carbridge.carplay.audio.CarAudioRouter.setVoiceCallMuted(ctx, true, audioLog());
         return true;
     }
 
@@ -1046,6 +1052,7 @@ public final class CarPlayWirelessTx {
         if (callCapture != null) {
             callCapture.stop();
         }
+        com.carbridge.carplay.audio.CarAudioRouter.setVoiceCallMuted(ctx, false, audioLog());
     }
 
     /** 取当前 AirPlay 会话（bridge 里握着的那个）。 */
@@ -1140,6 +1147,35 @@ public final class CarPlayWirelessTx {
      */
     public void markStreaming() {
         enterStep(Step.CARPLAY_STREAM);
+        startCallWatcher();
+    }
+
+    /**
+     * 开始监听系统通话状态。
+     *
+     * <p>不依赖 Car+ 上报：实测它有时根本不发通话事件，导致「通话开始」分支不执行，
+     * 声音就一直留在手机上。音频模式变化是最可靠的信号。
+     */
+    private void startCallWatcher() {
+        if (callWatcher != null) return;
+        callWatcher = new com.carbridge.carplay.audio.PhoneCallWatcher(ctx,
+                new com.carbridge.carplay.audio.PhoneCallWatcher.Listener() {
+                    @Override public void onCallActive(boolean active) {
+                        // 与 CarLife 上报走同一条处理链，reportCallState 内部会去重
+                        reportCallState(active);
+                    }
+                },
+                new com.carbridge.carplay.audio.PhoneCallWatcher.Log() {
+                    @Override public void onLog(String line) { log(line); }
+                });
+        callWatcher.start();
+    }
+
+    private void stopCallWatcher() {
+        if (callWatcher != null) {
+            callWatcher.stop();
+            callWatcher = null;
+        }
     }
 
     private void log(String m) {

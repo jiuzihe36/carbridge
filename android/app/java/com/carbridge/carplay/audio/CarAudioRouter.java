@@ -510,6 +510,39 @@ public final class CarAudioRouter {
         }
     }
 
+
+    /** 被压掉之前的通话音量（-1 = 没压过）。 */
+    private static int savedVoiceVolume = -1;
+
+    /**
+     * 压掉/恢复**手机本机的通话音量**。
+     *
+     * <p>为什么需要：我们把通话声另外采一份送去车机，但系统仍然会把通话音频
+     * 从听筒/扬声器放出来 —— 两者是并行的，不会因为我们「也发了一份」就静音。
+     * 真 iPhone 是被系统整体改路由，第三方只能退一步：送车机的同时把本地音量压到 0。
+     */
+    public static void setVoiceCallMuted(Context ctx, boolean muted, Log log) {
+        try {
+            AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
+            if (am == null) return;
+            if (muted) {
+                if (savedVoiceVolume < 0) {
+                    savedVoiceVolume = am.getStreamVolume(AudioManager.STREAM_VOICE_CALL);
+                }
+                am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, 0, 0);
+                emit(log, "通话音频：已压掉本机通话音量（原 " + savedVoiceVolume + "）→ 声音只走车机");
+            } else {
+                if (savedVoiceVolume >= 0) {
+                    am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, savedVoiceVolume, 0);
+                    emit(log, "通话音频：已恢复本机通话音量 " + savedVoiceVolume);
+                    savedVoiceVolume = -1;
+                }
+            }
+        } catch (Throwable t) {
+            emit(log, "通话音频：调整通话音量失败: " + t);
+        }
+    }
+
     /**
      * 静音/恢复本机来电铃声。
      */
