@@ -21,9 +21,25 @@ public final class CtrlIntServer {
     }
 
     private final Listener listener;
+
+    /**
+     * 车机最后一次邀请我们的时刻（{@code GET /ctrl-int/1/connect}）。
+     *
+     * <p>为什么要记：车机的邀请是**有时效**的（mcarplay 现场观察约 20 秒）。
+     * 我们如果因为等端口/等屏亮拖到几十秒后才去开 AirPlay 会话，车机那头
+     * 可能已经放弃这一轮，表现就是「会话建起来了但车机不消费/黑屏」，
+     * 而日志里看不出是「邀请过期」还是「车机不兼容」。把年龄打出来就能区分。
+     */
+    private static volatile long lastInviteAtMs;
     private ServerSocket server;
     private volatile boolean running;
     private Thread acceptThread;
+
+    /** 距离车机上次邀请已经过去多久（毫秒）；从没邀请过返回 -1。 */
+    public static long lastInviteAgeMs() {
+        long t = lastInviteAtMs;
+        return t == 0 ? -1 : System.currentTimeMillis() - t;
+    }
 
     public CtrlIntServer(Listener listener) {
         this.listener = listener;
@@ -104,6 +120,9 @@ public final class CtrlIntServer {
             }
             if (request == null) return;
             listener.onLog("ctrl-int 收到: " + request);
+            if (request != null && request.contains("/ctrl-int/1/connect")) {
+                lastInviteAtMs = System.currentTimeMillis();
+            }
             OutputStream out = sock.getOutputStream();
             // 真 iPhone 回的是「裸 200」——只写状态行 + 空行，不写任何头
             //（连 Content-Length 都不写；orangecar 参考：GET /ctrl-int/1/connect → bare 200 OK）。

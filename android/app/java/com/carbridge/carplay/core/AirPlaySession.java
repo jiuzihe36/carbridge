@@ -194,6 +194,14 @@ public final class AirPlaySession {
     private long audioFormatBit = 0x800L;
     private long audioStreamType = 100L;
     private String audioTypeName = "media";
+    // ── 心跳健康度（长时间会话的可观测性）──
+    private long feedbackOkCount;
+    private long feedbackFailCount;
+    private long lastLivenessLogMs;
+    private long lastSampleTimeSeen = -1;
+    private int sampleStallSec;
+    private long sampleStallWarnedAtMs;
+
     /** 车机 /feedback 报的音频流消费进度（样本数），0 = 一个都没消费。 */
     private long lastAudioSampleTime = -1;
     /** 连续多少秒 sampleTime 仍为 0。 */
@@ -388,6 +396,16 @@ public final class AirPlaySession {
             int eventPort = asInt(pick(reply, "eventPort"), 0);
             int keepAlivePort = asInt(pick(reply, "keepAlivePort"), 0);
             log("SETUP ok: eventPort=" + eventPort + " keepAlivePort=" + keepAlivePort);
+            long inviteAge = com.carbridge.carplay.net.CtrlIntServer.lastInviteAgeMs();
+            if (inviteAge < 0) {
+                log("车机本轮还没邀请过我们（没有 GET /ctrl-int/1/connect）→ 走的是 0x4301/mDNS 路径");
+            } else if (inviteAge > 20000) {
+                log("⚠ 车机邀请已过 " + (inviteAge / 1000) + " 秒才建会话"
+                        + "（现场观察邀请窗口约 20 秒）→ 车机可能已放弃这一轮，"
+                        + "若出现黑屏/不出声优先怀疑这个");
+            } else {
+                log("车机邀请年龄 " + inviteAge + "ms（在窗口内）");
+            }
 
             info = AirPlayInfo.parse(Bplist.read(requestRaw("GET", "/info", Bplist.write(new LinkedHashMap<String, Object>()))));
             AirPlayInfo.Display d = info.primaryDisplay();
@@ -863,6 +881,20 @@ public final class AirPlaySession {
             return;
         }
         if (sampleTime < 0) return;
+        // 停滞检测：车机一开始消费、后来卡住不动（不等于 0），
+        // 说明它的解码/播放缓冲堵了，声音会「越走越晚」最终断掉。
+        if (lastSampleTimeSeen >= 0 && sampleTime == lastSampleTimeSeen && sampleTime > 0) {
+            sampleStallSec++;
+            long now = System.currentTimeMillis();
+            if (sampleStallSec >= 10 && (now - sampleStallWarnedAtMs > 60_000)) {
+                sampleStallWarnedAtMs = now;
+                log("⚠ 车机音频消费停滞：sampleTime 连续 " + sampleStallSec
+                        + " 秒停在 " + sampleTime + "（声音会越走越晚，最终可能断）");
+            }
+        } else {
+            sampleStallSec = 0;
+        }
+        lastSampleTimeSeen = sampleTime;
         lastAudioSampleTime = sampleTime;
         if (sampleTime == 0) {
             audioNotConsumedSec++;
@@ -876,6 +908,27 @@ public final class AirPlaySession {
             }
             audioNotConsumedSec = 0;
         }
+    }
+
+
+    /**
+     * 每 60 秒打一行心跳健康度。
+     *
+     * <p>长会话里最怕的是「日志只剩 /feedback 在刷，但看不出车机到底还认不认我们」。
+     * 这一行把三件事放在一起：控制通道成没成、车机有没有在消费音频、视频发了多少帧。
+     */
+    private void logLivenessIfDue() {
+        long now = System.currentTimeMillis();
+        if (lastLivenessLogMs == 0) {
+            lastLivenessLogMs = now;
+            return;
+        }
+        if (now - lastLivenessLogMs < 60_000) return;
+        lastLivenessLogMs = now;
+        log("心跳健康：成功 " + feedbackOkCount + " 次 / 失败 " + feedbackFailCount
+                + " 次；音频 sampleTime=" + lastSampleTimeSeen
+                + "（" + (lastSampleTimeSeen <= 0 ? "车机没在消费" : "车机在消费") + "）"
+                + "；视频已发 " + vidTotal + " 帧");
     }
 
     private void openScreenStream(AirPlayInfo.Display d) throws IOException {        streamConnectionId = (long) (Math.random() * Long.MAX_VALUE) + 1;
@@ -1189,8 +1242,11 @@ public final class AirPlaySession {
                             byte[] fb = requestRaw("POST", "/feedback", null);
                             trackAudioConsumption(fb);
                             failures = 0;
+                            feedbackOkCount++;
+                            logLivenessIfDue();
                         } catch (Exception e) {
                             failures++;
+                            feedbackFailCount++;
                             // ⚠️ 会话 ERROR 时 running 仍为 true（stop() 未必被调用），
                             // 不设上限会对着已死的 socket 每秒刷屏（实测刷 53 次）。
                             if (failures >= 3) {
@@ -1603,6 +1659,8 @@ public final class AirPlaySession {
     private long vidGapSumNanos, vidGapMaxNanos, vidGapCount;
     /** 1 秒滑动桶里最多收到多少帧 —— 用来区分「内容静止所以帧少」和「上游被限速」。 */
     private long vidSecStartMs, vidSecCount, vidSecMax;
+    /** 整个会话累计发出的视频帧数（只增不减，给心跳汇总用）。 */
+    private long vidTotal;
 
     private void trackVideoLatency(long nanos) {
         long nowNs = System.nanoTime();
@@ -1622,6 +1680,7 @@ public final class AirPlaySession {
             vidSecCount = 0;
         }
         vidSecCount++;
+        vidTotal++;
         vidCount++;
         vidSumNanos += nanos;
         vidMaxNanos = Math.max(vidMaxNanos, nanos);
