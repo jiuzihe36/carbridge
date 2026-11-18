@@ -1010,6 +1010,52 @@ public final class CarPlayWirelessTx {
     }
 
     private com.carbridge.carplay.audio.CarAudioRouter.Log audioLogAdapter;
+    /** 通话音频采集（走 AirPlay telephony 流）。 */
+    private com.carbridge.carplay.audio.CallAudioCapture callCapture;
+
+    /**
+     * 开 telephony 上行（手机 → 车机喇叭）。
+     *
+     * @return true = 已开始采集；false = 车机没有 telephony 流，调用方应退回 HFP
+     */
+    private boolean startTelephonyUplink() {
+        com.carbridge.carplay.core.AirPlaySession ap = airPlaySession();
+        if (ap == null || !ap.hasTelephonyStream()) {
+            log("通话音频：车机没有 telephony 音频流（/info 未声明 100/telephony）");
+            return false;
+        }
+        if (callCapture == null) {
+            callCapture = new com.carbridge.carplay.audio.CallAudioCapture(
+                    new com.carbridge.carplay.audio.CallAudioCapture.Sink() {
+                        @Override public void onPcm(byte[] pcm, int len, long ptsMs) {
+                            com.carbridge.carplay.core.AirPlaySession s = airPlaySession();
+                            if (s != null) s.submitTelephonyAudio(
+                                    len == pcm.length ? pcm : java.util.Arrays.copyOf(pcm, len), ptsMs);
+                        }
+                    },
+                    new com.carbridge.carplay.audio.CallAudioCapture.Log() {
+                        @Override public void onLog(String line) { log(line); }
+                    });
+        }
+        log("通话音频：走 AirPlay telephony 流（真 iPhone 的方式）");
+        callCapture.start(ctx);
+        return true;
+    }
+
+    private void stopTelephonyUplink() {
+        if (callCapture != null) {
+            callCapture.stop();
+        }
+    }
+
+    /** 取当前 AirPlay 会话（bridge 里握着的那个）。 */
+    private com.carbridge.carplay.core.AirPlaySession airPlaySession() {
+        return com.carbridge.carplay.core.AirPlaySession.current();
+    }
+
+    /** 上一次通话状态：用于去重（同一次通话会被回调多次）。 */
+    private boolean callStateKnown;
+    private boolean lastCallState;
 
     /**
      * 上报通话状态给车机（iAP2 {@code 0x4155 CallStateUpdate}）。
@@ -1019,6 +1065,11 @@ public final class CarPlayWirelessTx {
      * 音频路由就是跟着这个状态走的。
      */
     public void reportCallState(boolean active) {
+        // CarLife 的监听会为同一次通话回调多次；不去重的话音频诊断会连打两遍
+        // （真机日志里「通话结束」那几行就是这么重复的）。
+        if (callStateKnown && lastCallState == active) return;
+        callStateKnown = true;
+        lastCallState = active;
         Iap2SenderSession s = iap2;
         if (s == null) return;
         s.setPhoneCallActive(active);
@@ -1026,10 +1077,12 @@ public final class CarPlayWirelessTx {
         // 否则现场就是「打电话时手机发音」（HFP 在会话建立时被拒、又没人重试）。
         if (active) {
             // 通话开始：先打一次音频现场（HFP 连没连、SCO 在不在、系统把谁当通话设备），
-            // 再尝试把音频交给车机，1.5s 后再打一次看结果 —— 只打一次看不出变化。
+            // 再按「首选 telephony 流 → 备选 HFP」的顺序把声音送出去。
             com.carbridge.carplay.audio.CarAudioRouter.describeRoute(ctx, audioLog());
-            if (!callAudioRouted) {
-                log("通话开始，重新尝试把通话音频交给车机（HFP）");
+            if (startTelephonyUplink()) {
+                // telephony 流可用：这是真 iPhone 走的路，优先它，不再去抢 HFP
+            } else if (!callAudioRouted) {
+                log("车机没有 telephony 音频流 → 退回尝试 HFP");
                 routeCallAudioToCar();
             }
             main.postDelayed(new Runnable() {
@@ -1038,6 +1091,7 @@ public final class CarPlayWirelessTx {
                 }
             }, 1500);
         } else {
+            stopTelephonyUplink();
             // 通话结束：还原默认通话设备，并把还原后的现场也打出来 ——
             // 「打完电话掉线」时有这一行才能判断是路由没还原还是车机自己断的。
             com.carbridge.carplay.audio.CarAudioRouter.clearCommunicationDevice(ctx, audioLog());

@@ -274,6 +274,7 @@ public final class AirPlaySession {
     // ================================================================== 生命周期
 
     public void start() {
+        CURRENT = this;
         if (running) return;
         running = true;
         new Thread(new Runnable() {
@@ -344,6 +345,7 @@ public final class AirPlaySession {
     }
 
     public void stop() {
+        if (CURRENT == this) CURRENT = null;
         running = false;
         closeQuietly(control);
         closeQuietly(eventChannel);
@@ -1419,9 +1421,25 @@ public final class AirPlaySession {
         }
     }
 
-        /**
-     * 提交**通话声**（audioType=telephony 的那条流）。
+    /**
+     * 当前活跃的会话（同一时刻只可能有一个）。
+     *
+     * <p>给「通话音频」这类旁路用的：它们只拿到 Context，拿不到 Activity 手里那个
+     * CarPlayBridge 实例，但有会话在跑时就必须能把 PCM 塞进去。
      */
+    private static volatile AirPlaySession CURRENT;
+
+    public static AirPlaySession current() {
+        return CURRENT;
+    }
+
+    /** 车机是否声明并已建立起 telephony 音频流（通话音频走这条，HFP 是备选）。 */
+    public boolean hasTelephonyStream() {
+        return state == State.STREAMING && telephonySocket != null
+                && telephonyAddr != null && telephonyPort > 0 && telephonyPacker != null;
+    }
+
+    /** 提交**通话声**（audioType=telephony 的那条流）。 */
     public void submitTelephonyAudio(byte[] pcm, long ptsMs) {
         if (state != State.STREAMING) return;
         if (telephonySocket == null || telephonyAddr == null || telephonyPort <= 0

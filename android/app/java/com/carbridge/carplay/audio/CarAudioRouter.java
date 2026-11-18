@@ -449,7 +449,12 @@ public final class CarAudioRouter {
             }
             sb.append("]；HFP代理=").append(headsetProxy == null ? "未拿到" : "已持有");
             if (headsetProxy != null) {
-                sb.append("；HFP连接=").append(headsetProxy.getConnectedDevices() != null);
+                // ⚠️ getConnectedDevices() 在「没连」时返回**空列表**而不是 null，
+                // 之前写成 != null 于是永远显示「已连接」（真机日志里就是这么骗人的）。
+                java.util.List<BluetoothDevice> hs = headsetProxy.getConnectedDevices();
+                int n = hs == null ? 0 : hs.size();
+                sb.append("；HFP连接=").append(n == 0 ? "无" : (n + "台"));
+                if (n > 0 && hs.get(0) != null) sb.append('(').append(hs.get(0).getName()).append(')');
             }
             emit(log, sb.toString());
         } catch (Throwable t) {
