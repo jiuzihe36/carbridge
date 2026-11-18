@@ -2212,10 +2212,23 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
      * <p>形状不变（都是 9999 胶囊），只换填充与文字色，避免按钮在
      * 「开始连接 → 断开」之间变形。
      */
+    /**
+     * 主按钮：空闲=蓝底白字「连接」，已连接=深红底红字「断开连接」。
+     *
+     * <p>⚠️ 这里以前把文字色设成 {@code accent}（蓝），而按钮底色也是 accent ——
+     * 蓝底蓝字，连上之后整条按钮变成「一条没有字的蓝条」（真机截图确认过）。
+     * 现在按状态连背景一起换：连接态用 bg_btn_danger，语义和可读性都对。
+     */
     private void setConnectButton(boolean running) {
         if (btnConnect == null) return;
         btnConnect.setText(running ? R.string.btn_disconnect : R.string.btn_connect);
-        btnConnect.setTextColor(getColorCompat(R.color.accent));
+        if (running) {
+            btnConnect.setBackgroundResource(R.drawable.bg_btn_danger);
+            btnConnect.setTextColor(getColorCompat(R.color.state_err));
+        } else {
+            btnConnect.setBackgroundResource(R.drawable.bg_btn_primary);
+            btnConnect.setTextColor(getColorCompat(R.color.on_accent));
+        }
     }
     /**
      * 状态徽标：底色跟着状态走。
