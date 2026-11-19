@@ -1769,6 +1769,9 @@ public final class HuClient {
                 byte[] buf = new byte[8192];
                 long drained = 0;
                 int pkts = 0;
+                // 导航语音的源格式：跟音乐通道一样由 MEDIA_INIT 声明，默认 16k 单声道
+                int ttsRate = 16000;
+                int ttsChannels = 1;
                 try {
                     Socket s = socks[3];
                     if (s == null) {
@@ -1798,6 +1801,18 @@ public final class HuClient {
                         drained += len;
                         pkts++;
 
+                        int ttsService = HuProto.mediaService(head);
+                        if (ttsService == HuProto.MEDIA_INIT) {
+                            int[] fmt = parseMediaInit(payload);
+                            if (fmt != null && fmt[0] > 0) {
+                                ttsRate = fmt[0];
+                                ttsChannels = Math.max(1, fmt[1]);
+                                log("← TTS 通道 MEDIA_INIT：" + fmt[0] + "Hz/" + fmt[1]
+                                        + "ch/" + fmt[2] + "bit（按此转 44.1k 立体声）");
+                            }
+                            continue;
+                        }
+
                         // 导航语音（16k 单声道）→ 44.1k 立体声，在**音乐空闲**时直接送出去。
                         //
                         // 为什么只在空闲时送：真正 iPhone 的做法是车机侧 duck（压低音乐），
@@ -1807,13 +1822,14 @@ public final class HuClient {
                         CarPlayBridge br = carPlayBridge;
                         if (br != null) {
                             byte[] stereo = com.carbridge.carplay.audio.NavVoicePcm
-                                    .mono16kToStereo44k(payload);
+                                    .toStereo44k(payload, ttsRate, ttsChannels);
                             if (stereo != null) {
                                 if (ttsForwarded == 0) {
                                     int ms = com.carbridge.carplay.audio.NavVoicePcm
-                                            .durationMs(len, 16000, 1, 2);
+                                            .durationMs(len, ttsRate, ttsChannels, 2);
                                     log("★ 导航语音开始混入" + len + "B ≈" + ms
-                                            + "ms@16k单声道 → " + stereo.length + "B@44.1k立体声"
+                                            + "ms@" + ttsRate + "Hz/" + ttsChannels + "ch → "
+                                            + stereo.length + "B@44.1kHz立体声"
                                             + (ms > 3000 ? "  ⚠ 时长异常，格式可能不是 16k 单声道" : ""));
                                 }
                                 // 先入混音器：音乐在播时由它压低音乐并叠加

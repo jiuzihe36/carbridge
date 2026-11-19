@@ -457,6 +457,22 @@ public final class SelfTests {
 
         check(com.carbridge.carplay.audio.NavVoicePcm.durationMs(32000, 16000, 1, 2) == 1000, "1 秒时长计算");
         check(com.carbridge.carplay.audio.NavVoicePcm.durationMs(0, 16000, 1, 2) == 0, "0 字节时长为 0");
+
+        // 已经是 44.1k 立体声：必须原样返回（不能重采样出二次失真）
+        byte[] already = new byte[4410 * 4];
+        for (int i = 0; i < already.length; i++) already[i] = (byte) (i & 0x3F);
+        byte[] passthrough = com.carbridge.carplay.audio.NavVoicePcm.toStereo44k(already, 44100, 2);
+        check(java.util.Arrays.equals(passthrough, already), "44.1k 立体声输入原样返回");
+
+        // 24k 单声道：1 秒应输出 44100 帧
+        byte[] mono24 = new byte[24000 * 2];
+        byte[] out24 = com.carbridge.carplay.audio.NavVoicePcm.toStereo44k(mono24, 24000, 1);
+        check(out24 != null && out24.length == 44100 * 4, "24k 单声道 → 44100 帧立体声");
+
+        // 16k 立体声：取左声道，1 秒 → 44100 帧
+        byte[] st16 = new byte[16000 * 4];
+        byte[] outSt = com.carbridge.carplay.audio.NavVoicePcm.toStereo44k(st16, 16000, 2);
+        check(outSt != null && outSt.length == 44100 * 4, "16k 立体声 → 44100 帧立体声");
     }
 
     // ---------------------------------------------------------------- 混音

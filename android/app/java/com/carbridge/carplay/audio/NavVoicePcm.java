@@ -27,16 +27,36 @@ public final class NavVoicePcm {
      * @return 立体声 PCM；输入非法时返回 null
      */
     public static byte[] mono16kToStereo44k(byte[] pcm) {
+        return toStereo44k(pcm, SRC_RATE, 1);
+    }
+
+    /**
+     * 任意源格式（16bit PCM）→ 44.1k 立体声。
+     *
+     * <p>为什么要能变：Car+ 的导航通道我们只见过「16kHz 单声道」这一种，
+     * 但它跟音乐一样会先发 MEDIA_INIT 声明格式。写死 16k 单声道的话，
+     * 万一某版 Car+ 改成 24k 或立体声，导航音就会变调/加速——而且听感上
+     * 只会觉得「语音怪怪的」，很难联想到采样率。
+     */
+    public static byte[] toStereo44k(byte[] pcm, int srcRate, int channels) {
         if (pcm == null || pcm.length < 2) return null;
+        if (srcRate <= 0) srcRate = SRC_RATE;
+        if (channels <= 0) channels = 1;
+        if (srcRate == DST_RATE && channels == 2) {
+            return pcm.clone();      // 已经是目标格式，原样返回
+        }
+        if (channels != 1) {
+            return multiToStereo44k(pcm, srcRate, channels);
+        }
         int frames = pcm.length / 2;
         if (frames <= 0) return null;
-        int outFrames = (int) ((long) frames * DST_RATE / SRC_RATE);
+        int outFrames = (int) ((long) frames * DST_RATE / srcRate);
         if (outFrames <= 0) return null;
         byte[] out = new byte[outFrames * 4];   // 每帧 2 声道 × 2 字节
 
         for (int i = 0; i < outFrames; i++) {
-            // 目标第 i 个样本对应源位置 = i * SRC/DST
-            double srcPos = (double) i * SRC_RATE / DST_RATE;
+            // 目标第 i 个样本对应源位置 = i * src/DST
+            double srcPos = (double) i * srcRate / DST_RATE;
             int i0 = (int) srcPos;
             int i1 = Math.min(i0 + 1, frames - 1);
             double frac = srcPos - i0;
@@ -47,6 +67,28 @@ public final class NavVoicePcm {
             if (v < -32768) v = -32768;
             writeShort(out, i * 4, v);         // L
             writeShort(out, i * 4 + 2, v);     // R
+        }
+        return out;
+    }
+
+    /** 多声道源的降级处理：取第一声道再做插值（导航语音本身是单声道内容）。 */
+    private static byte[] multiToStereo44k(byte[] pcm, int srcRate, int channels) {
+        int frames = pcm.length / (2 * channels);
+        if (frames <= 0) return null;
+        int outFrames = (int) ((long) frames * DST_RATE / srcRate);
+        byte[] out = new byte[outFrames * 4];
+        for (int i = 0; i < outFrames; i++) {
+            double srcPos = (double) i * srcRate / DST_RATE;
+            int i0 = (int) srcPos;
+            int i1 = Math.min(i0 + 1, frames - 1);
+            double frac = srcPos - i0;
+            int s0 = readShort(pcm, i0 * channels);
+            int s1 = readShort(pcm, i1 * channels);
+            int v = (int) Math.round(s0 + (s1 - s0) * frac);
+            if (v > 32767) v = 32767;
+            if (v < -32768) v = -32768;
+            writeShort(out, i * 4, v);
+            writeShort(out, i * 4 + 2, v);
         }
         return out;
     }
