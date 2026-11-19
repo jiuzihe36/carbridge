@@ -139,8 +139,12 @@ public final class HuClient {
 
     /** 音乐音频最后一次到达的时刻：用于判断「音乐是不是正闲着」。 */
     private volatile long lastMediaAudioAtMs;
-    /** 已成功转发到车机的导航语音包数。 */
-    private volatile long ttsForwarded;
+    /** 「语音通道有数据」只打一次（两条通道共用）。 */
+    private volatile int voiceLogged;
+    /** 已成功转发到车机的语音包数（TTS + 语音助手）。 */
+    private volatile long voiceForwarded;
+    /** 每条语音通道是否已经在读（9241/9242 各一个）。 */
+    private final boolean[] voiceReading = new boolean[2];
     /** 音乐在播时被丢弃的导航语音包数（诊断用）。 */
     private volatile long ttsDropped;
 
@@ -148,8 +152,6 @@ public final class HuClient {
     private volatile long emptyFrames;
     /** 音频读取线程在跑（9240 通道）。**不读会把手机侧的媒体发送堵死**。 */
     private volatile boolean audioReading;
-    /** TTS 排空线程在跑（9241 通道，只读不转发）。 */
-    private volatile boolean ttsReading;
     /**
      * 媒体读取线程的「会话代际」：每次 {@link #closeAll()} 自增。
      *
@@ -597,7 +599,6 @@ public final class HuClient {
         running = false;
         videoReading = false;
         audioReading = false;
-        ttsReading = false;
         hbGen++;
         stopTouchThread();
         closeAll();
@@ -608,7 +609,6 @@ public final class HuClient {
     private void closeAll() {
         videoReading = false;
         audioReading = false;
-        ttsReading = false;
         mediaGen++;                    // 换代：旧的媒体读取线程据此自行退出、且不再动标志
         hbGen++;                       // 让这一轮的心跳线程自己退出
         startScheduled = false;        // 取消还没发出的 START
@@ -1532,7 +1532,8 @@ public final class HuClient {
                         + "（已等投屏 " + CAST_READY_DELAY_MS + "ms，等对端上报模块状态 / 视频帧）");
                 startVideoReader();
                 startAudioReader();
-                startTtsDrain();
+                startVoiceDrain(3, "导航语音");     // 9241 TTS
+                startVoiceDrain(4, "语音助手");     // 9242 VR（以前根本没读，会反压 Car+）
             }
         }, "hu-enc-start-g" + gen).start();
     }
@@ -1751,35 +1752,36 @@ public final class HuClient {
     }
 
     /**
-     * TTS 通道（9241）只读不转发——目的是**把数据从 TCP 缓冲里排空**。
+     * 语音通道（9241 TTS / 9242 语音助手）：读出来 → 混进车机音频流。
      *
-     * <p>导航语音等会往 9241 推数据；若从不读，接收缓冲填满后会反压手机侧的
-     * 发送线程（与音频通道同源的坑）。内容暂不转发到车机（CarPlay 音频流只走
-     * media 档），读出来丢掉即可保持链路畅通。
+     * <p>两条都必须读：CarLife 会把导航播报和语音助手提示分别推到 9241/9242，
+     * **不读的那个端口接收缓冲会填满，反压 Car+ 自己的写线程**（和音频通道同源的坑）。
+     * 9242 以前根本没读——只有 9241 在读，属于漏了一条。
+     *
+     * <p>读到的内容交给 {@link com.carbridge.carplay.audio.AudioDuckingMixer}：
+     * 音乐在播就压低音乐叠加，音乐闲着就直接发出去。
      */
-    private void startTtsDrain() {
-        if (ttsReading) {
+    private void startVoiceDrain(final int slot, final String label) {
+        final int idx = slot - 3;
+        if (idx < 0 || idx >= voiceReading.length || voiceReading[idx]) {
             return;
         }
-        ttsReading = true;
+        voiceReading[idx] = true;
         final int gen = mediaGen;
         new Thread(new Runnable() {
             @Override
             public void run() {
-                byte[] buf = new byte[8192];
                 long drained = 0;
                 int pkts = 0;
-                // 导航语音的源格式：跟音乐通道一样由 MEDIA_INIT 声明，默认 16k 单声道
-                int ttsRate = 16000;
-                int ttsChannels = 1;
+                // 语音通道的源格式：跟音乐通道一样由 MEDIA_INIT 声明，默认 16k 单声道
+                int rate = 16000;
+                int channels = 1;
                 try {
-                    Socket s = socks[3];
+                    Socket s = socks[slot];
                     if (s == null) {
-                        return;     // 由 finally 复位标志，否则 ttsReading 卡在 true、
-                                    // 之后每次 startTtsDrain 都空转，TTS 永远排不空
+                        return;
                     }
                     java.io.InputStream in = s.getInputStream();
-                    // gen 守卫：与音频线程同理，会话换代即退出
                     while (running && gen == mediaGen) {
                         byte[] head = readN(s, 12);
                         if (head == null) {
@@ -1801,65 +1803,56 @@ public final class HuClient {
                         drained += len;
                         pkts++;
 
-                        int ttsService = HuProto.mediaService(head);
-                        if (ttsService == HuProto.MEDIA_INIT) {
+                        if (HuProto.mediaService(head) == HuProto.MEDIA_INIT) {
                             int[] fmt = parseMediaInit(payload);
                             if (fmt != null && fmt[0] > 0) {
-                                ttsRate = fmt[0];
-                                ttsChannels = Math.max(1, fmt[1]);
-                                log("← TTS 通道 MEDIA_INIT：" + fmt[0] + "Hz/" + fmt[1]
+                                rate = fmt[0];
+                                channels = Math.max(1, fmt[1]);
+                                log("← " + label + "通道 MEDIA_INIT：" + fmt[0] + "Hz/" + fmt[1]
                                         + "ch/" + fmt[2] + "bit（按此转 44.1k 立体声）");
                             }
                             continue;
                         }
-
-                        // 导航语音（16k 单声道）→ 44.1k 立体声，在**音乐空闲**时直接送出去。
-                        //
-                        // 为什么只在空闲时送：真正 iPhone 的做法是车机侧 duck（压低音乐），
-                        // 但接收端对 duckAudio/第二条流的支持不可靠（mcarplay 2026-10 实测）。
-                        // 手机侧混音要处理增益包络与限幅，没有听感验证前不敢动音乐那一路，
-                        // 所以先做**无风险的一半**：音乐静音时导航能响。
-                        CarPlayBridge br = carPlayBridge;
-                        if (br != null) {
-                            byte[] stereo = com.carbridge.carplay.audio.NavVoicePcm
-                                    .toStereo44k(payload, ttsRate, ttsChannels);
-                            if (stereo != null) {
-                                if (ttsForwarded == 0) {
-                                    int ms = com.carbridge.carplay.audio.NavVoicePcm
-                                            .durationMs(len, ttsRate, ttsChannels, 2);
-                                    log("★ 导航语音开始混入" + len + "B ≈" + ms
-                                            + "ms@" + ttsRate + "Hz/" + ttsChannels + "ch → "
-                                            + stereo.length + "B@44.1kHz立体声"
-                                            + (ms > 3000 ? "  ⚠ 时长异常，格式可能不是 16k 单声道" : ""));
-                                }
-                                // 先入混音器：音乐在播时由它压低音乐并叠加
-                                duckMixer.submitPrompt(stereo);
-                                ttsForwarded++;
-                                // 音乐闲着就直接把提示音发出去（否则要等下一段音乐才播）
-                                if (System.currentTimeMillis() - lastMediaAudioAtMs > 300) {
-                                    byte[] p = duckMixer.drainPrompt();
-                                    if (p != null) {
-                                        br.submitAudio(p, p.length, HuProto.mediaTimestamp(head));
-                                    }
-                                }
-                            }
+                        if (len > 0 && voiceLogged == 0) {
+                            voiceLogged = 1;
+                            log("← " + label + "通道有数据 len=" + len + "（开始混入车机音频）");
                         }
-                        if (pkts == 1) {
-                            log("← TTS 通道有数据（已排空，暂不转发）len=" + len);
+
+                        CarPlayBridge br = carPlayBridge;
+                        if (br == null) continue;
+                        byte[] stereo = com.carbridge.carplay.audio.NavVoicePcm
+                                .toStereo44k(payload, rate, channels);
+                        if (stereo == null) continue;
+                        if (voiceForwarded == 0) {
+                            int ms = com.carbridge.carplay.audio.NavVoicePcm
+                                    .durationMs(len, rate, channels, 2);
+                            log("★ " + label + "开始混入 " + len + "B ≈" + ms
+                                    + "ms@" + rate + "Hz/" + channels + "ch → "
+                                    + stereo.length + "B@44.1kHz立体声"
+                                    + (ms > 3000 ? "  ⚠ 时长异常，格式可能不是语音格式" : ""));
+                        }
+                        duckMixer.submitPrompt(stereo);
+                        voiceForwarded++;
+                        // 音乐闲着就直接把提示音发出去（否则要等下一段音乐才播）
+                        if (System.currentTimeMillis() - lastMediaAudioAtMs > 300) {
+                            byte[] p = duckMixer.drainPrompt();
+                            if (p != null) {
+                                br.submitAudio(p, p.length, HuProto.mediaTimestamp(head));
+                            }
                         }
                     }
                 } catch (Throwable t) {
                     // 通道关闭是正常收尾，不刷屏
                 } finally {
                     if (gen == mediaGen) {
-                        ttsReading = false;
+                        voiceReading[idx] = false;
                     }
                 }
                 if (drained > 0) {
-                    log("TTS 通道共排空 " + pkts + " 包 / " + drained + "B");
+                    log(label + "通道共 " + pkts + " 包 / " + drained + "B");
                 }
             }
-        }, "hu-tts-drain").start();
+        }, "hu-voice-" + slot).start();
     }
 
     /**
