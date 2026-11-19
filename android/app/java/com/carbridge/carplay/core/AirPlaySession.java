@@ -1927,9 +1927,13 @@ public final class AirPlaySession {
             log("车机触摸报告解析失败（" + report.length + "B）: " + e);
             return;
         }
-        // 只打首次，避免触摸高频刷屏；用于确认车机触摸确实经事件通道到达
-        if (hidReceived++ == 0) {
-            log("★ 收到车机触摸 report=" + report.length + "B → (" + t.x + "," + t.y + ") down=" + t.down);
+        // 前后各打几条 + 之后每 100 条一条：既避免高频刷屏，又能在现场/回归时确认
+        // 「触摸还在不在」。原来只打第一条，导致排查时完全看不到后续触摸
+        //（锁屏后判断「触摸有没有效」就是这么被误导的）。
+        long n = hidReceived++;
+        if (n < 5 || n % 100 == 0) {
+            log("★ 收到车机触摸 #" + (n + 1) + " report=" + report.length + "B → ("
+                    + t.x + "," + t.y + ") down=" + t.down);
         }
         listener.onTouch(t.x, t.y, t.down);
     }

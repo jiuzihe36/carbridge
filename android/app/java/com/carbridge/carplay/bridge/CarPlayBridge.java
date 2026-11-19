@@ -223,9 +223,11 @@ public final class CarPlayBridge implements AirPlaySession.Listener {
         lastDown = down;
         lastX = x;
         lastY = y;
-        // 只打首条：确认车机触摸已换算并转交给 Car+（高频触摸会刷屏）
-        if (touchForwarded++ == 0) {
-            log("★ 车机触摸已转交 Car+ action=" + action + " (" + x + "," + y
+        // 前后各打几条 + 每 100 条一条：高频触摸不刷屏，但「现在还有没有在转交」
+        // 必须看得出来（只打首条会让锁屏/断链排查完全失去依据）。
+        long nf = touchForwarded++;
+        if (nf < 5 || nf % 100 == 0) {
+            log("★ 车机触摸已转交 Car+ #" + (nf + 1) + " action=" + action + " (" + x + "," + y
                     + ") stream=" + streamW + "x" + streamH);
         }
         // 动作分布计数：DOWN/UP/MOVE 都要发得出去——只发 DOWN 不发 UP，车机侧不会 dispatchGesture
