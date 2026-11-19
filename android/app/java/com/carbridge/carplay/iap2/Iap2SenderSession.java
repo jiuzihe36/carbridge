@@ -19,6 +19,9 @@ public final class Iap2SenderSession {
 
         /** 从 0x4301 拿到 CarPlay 会话端点；车机不发 0x4301 时不会触发（走 mDNS）。 */
         void onCarPlayEndpoint(Endpoint endpoint);
+
+        /** 收到车机身份（0x1D01）→ 进入识别/MFi 阶段，进度条据此推进。 */
+        void onIdentified();
     }
 
     public enum State {
@@ -107,6 +110,8 @@ public final class Iap2SenderSession {
     /** 从 0xAA01 证书解析出的车机 EC 公钥（P-256，验签用）。 */
     private java.security.PublicKey peerEcKey;
     /** 证书是否落在 Apple 的 OID 体系里（判定「是不是 Apple 签发的配件」）。 */
+    /** 已经打印过多少条入站消息（前 24 条全打，之后只打未识别的）。 */
+    private int rxMsgLogged;
     private boolean peerCertApple;
 
     /** 从 0xAA01 证书解析出的车机 RSA 公钥（验签用）。 */
@@ -387,6 +392,13 @@ public final class Iap2SenderSession {
     }
 
     private void onMessage(Iap2Csm.Message m) {
+        // 全量留痕（前 24 条）：卡在认证时，最需要知道「车机到底发了哪几条」。
+        // 以前只打未识别的消息，于是「证书没到」和「证书到了但没解析出来」长得一模一样。
+        if (rxMsgLogged < 24) {
+            rxMsgLogged++;
+            log("← iAP2 消息 " + Iap2Ids.name(m.messageId) + " (0x"
+                    + Integer.toHexString(m.messageId) + ") " + m.body.length + "B");
+        }
         switch (m.messageId) {
             case Iap2Ids.START_IDENTIFICATION:
                 onStartIdentification();
@@ -548,6 +560,7 @@ public final class Iap2SenderSession {
             log("  车机身份：model=" + carModel + " serial=" + carSerial
                     + " maker=" + (maker == null ? "?" : maker.asString())
                     + " fw=" + (fw == null ? "?" : fw.asString()));
+            listener.onIdentified();
         }
         // 无线 CarPlay 组件（id 24）里带车机热点信息
         Iap2Csm.Param wireless = Iap2Csm.find(params, Iap2Ids.Id.WIRELESS_CARPLAY_COMPONENT);

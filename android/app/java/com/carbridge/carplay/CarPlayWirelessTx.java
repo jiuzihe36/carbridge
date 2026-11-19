@@ -415,6 +415,8 @@ public final class CarPlayWirelessTx {
 
             final Iap2SenderSession[] holder = new Iap2SenderSession[1];
             Iap2SenderSession session = new Iap2SenderSession(new Iap2SenderSession.Listener() {
+                        @Override public void onIdentified() { markIdentifying(); }
+
                         @Override public void onState(Iap2SenderSession.State s) {
                             if (iap2 != holder[0]) return;   // 旧会话的迟到回调，忽略
                             log("iAP2: " + s);
@@ -1164,10 +1166,35 @@ public final class CarPlayWirelessTx {
         }
     }
 
+    /**
+     * 状态变化 → 同步推进进度条。
+     *
+     * <p>⚠️ 以前只有 {@link Step#CARPLAY_STREAM} 有 enterStep 调用，其余步骤
+     * （链路握手 / 识别 / 热点 / mDNS / AirPlay 会话）**从来没人推进**，
+     * 于是进度页永远停在「蓝牙监听 进行中」，剩下全是「待开始」——
+     * 明明已经连上、甚至已经在推流，界面却显示卡在第一步。
+     *
+     * <p>这里把 State 映射成 Step（状态驱动，不引入定时器）。
+     */
     private void setState(State s) {
         if (state == s) return;
         state = s;
+        switch (s) {
+            case LISTENING_BT:  enterStep(Step.BT_LISTEN); break;
+            case IAP2:          enterStep(step == Step.BT_LISTEN ? Step.IAP2_LINK : step); break;
+            case JOINING_WIFI:  enterStep(Step.WIFI_JOIN); break;
+            case DISCOVERING:   enterStep(Step.MDNS); break;
+            case AIRPLAY:       enterStep(Step.AIRPLAY_SESSION); break;
+            default: break;      // IDLE / ERROR 不推进（ERROR 由 failStep 负责）
+        }
         listener.onState(s);
+    }
+
+    /** iAP2 进入识别阶段（收到车机身份）→ 推进到「识别 / MFi 认证」。 */
+    public void markIdentifying() {
+        if (state == State.IAP2 || state == State.LISTENING_BT) {
+            enterStep(Step.IAP2_IDENTIFY);
+        }
     }
 
     private void enterStep(Step s) {
