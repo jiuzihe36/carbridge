@@ -476,6 +476,9 @@ public final class SelfTests {
         check(out != null && out.length == music.length, "输出与输入等长（时间轴不漂）");
         check(m.currentGain() > 0.99f, "无提示时音乐不被压低");
 
+        // 没有提示音时，输出必须与输入**逐字节相同** —— 这是「混音器不影响音乐」的硬保证
+        check(java.util.Arrays.equals(out, music), "无提示时输出与输入逐字节相同（音乐不被改动）");
+
         // 送一段提示音，再混：音乐应被压低、输出仍等长
         byte[] prompt = new byte[4410 * 4];
         for (int i = 0; i < prompt.length; i++) prompt[i] = (byte) 0x20;
