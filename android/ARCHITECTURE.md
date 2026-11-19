@@ -28,8 +28,6 @@
 | 加入车机热点 | `carplay/net/WifiJoiner.java` | — |
 | 热点 Wi-Fi MAC 解析 | `carplay/net/WifiMacResolver.java` | — |
 | Car+（CarLife）通道、编码参数协商 | `app/HuClient.java` | — |
-| 音乐+导航的手机侧混音（ducking） | `carplay/audio/AudioDuckingMixer.java` | `AirPlaySession`（只负责发） |
-| 导航语音 16k→44.1k 格式转换 | `carplay/audio/NavVoicePcm.java` | — |
 | 通话音频采集（telephony 流） | `carplay/audio/CallAudioCapture.java` | — |
 | 通话检测（音频模式监听） | `carplay/audio/PhoneCallWatcher.java` | — |
 | 通话/铃声的音频路由与音量 | `carplay/audio/CarAudioRouter.java` | — |

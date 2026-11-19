@@ -133,41 +133,10 @@ public final class HuClient {
     private final Socket[] socks = new Socket[HU_SLOTS];
     private volatile int[] activePorts = HuProto.WIFI_PORTS;
     private volatile boolean videoReading;
-    /**
-     * 混音器旁路开关（A/B 用）。
-     *
-     * <p>文件 {@code <外部files>/mixer_off} 存在时，音乐**原样**送去车机、语音通道只读不混。
-     * 用来判断「压低+导航播报」到底是我们在做，还是 Car+/系统在内部做的：
-     * 旁路后如果听感不变，就说明是上游干的。
-     *
-     * <p>用文件而不是设置项：adb 直接 `touch`/`rm` 就能切，不用点界面。
-     */
-    private volatile boolean mixerBypassed;
-
-    private void refreshMixerBypass() {
-        try {
-            java.io.File f = new java.io.File(ctx.getExternalFilesDir(null), "mixer_off");
-            boolean off = f.exists();
-            if (off != mixerBypassed) {
-                mixerBypassed = off;
-                log(off ? "⚠ 混音器已旁路（mixer_off 存在）：音乐原样送出，语音只读不混"
-                        : "混音器恢复启用（mixer_off 已删除）");
-            }
-        } catch (Throwable t) {
-            com.carbridge.carplay.util.Diag.w("mixerBypass", t);
-        }
-    }
-
-    /** 音乐+导航的手机侧混音器（带 ducking 增益包络）。 */
-    private final com.carbridge.carplay.audio.AudioDuckingMixer duckMixer =
-            new com.carbridge.carplay.audio.AudioDuckingMixer();
-
     /** 音乐音频最后一次到达的时刻：用于判断「音乐是不是正闲着」。 */
     private volatile long lastMediaAudioAtMs;
     /** 「语音通道有数据」只打一次（两条通道共用）。 */
     private volatile int voiceLogged;
-    /** 已成功转发到车机的语音包数（TTS + 语音助手）。 */
-    private volatile long voiceForwarded;
     /** 每条语音通道是否已经在读（9241/9242 各一个）。 */
     private final boolean[] voiceReading = new boolean[2];
     /** 音乐在播时被丢弃的导航语音包数（诊断用）。 */
@@ -1760,14 +1729,10 @@ public final class HuClient {
                     } else {
                         // 音乐与导航在手机侧混好再送：接收端对 duckAudio / 第二条流不可靠，
                         // 而混音发生在编码之前，对任何档位都成立。
-                        refreshMixerBypass();
-                        if (dataPkts % 400 == 0) refreshMixerBypass();
-                        byte[] mixed = mixerBypassed ? payload : duckMixer.mixMusic(payload, len);
-                        bridge.submitAudio(mixed, len, ts);
-                        if (dataPkts % 200 == 0 && duckMixer.currentGain() < 0.99f) {
-                            log("音乐已压低（gain=" + String.format(java.util.Locale.US, "%.2f",
-                                    duckMixer.currentGain()) + "），导航语音混在中");
-                        }
+                        // 直接送：Car+ 抓的就是系统混音，导航语音和「压低音乐」都已经在里面
+                        // （实测 2026-11-19：高德播报时 Android 把音乐 VolumeShaper 压到 0.2，
+                        //  Car+ 抓到的流里同时有语音 —— 我们不需要自己混）。
+                        bridge.submitAudio(payload, len, ts);
                     }
                 }
             }
@@ -1785,8 +1750,9 @@ public final class HuClient {
      * **不读的那个端口接收缓冲会填满，反压 Car+ 自己的写线程**（和音频通道同源的坑）。
      * 9242 以前根本没读——只有 9241 在读，属于漏了一条。
      *
-     * <p>读到的内容交给 {@link com.carbridge.carplay.audio.AudioDuckingMixer}：
-     * 音乐在播就压低音乐叠加，音乐闲着就直接发出去。
+     * <p>**只读不转发**：Car+ 抓到的是系统混音，导航语音/压低音乐都已经在 9240 那条
+     * 音乐流里了（2026-11-19 实测：高德播报时 Android 把音乐压到 0.2，同一路流里
+     * 同时有语音）。这里读的目的是别让接收缓冲填满反压 Car+，读出来丢掉即可。
      */
     private void startVoiceDrain(final int slot, final String label) {
         final int idx = slot - 3;
@@ -1833,42 +1799,15 @@ public final class HuClient {
                         if (HuProto.mediaService(head) == HuProto.MEDIA_INIT) {
                             int[] fmt = parseMediaInit(payload);
                             if (fmt != null && fmt[0] > 0) {
-                                rate = fmt[0];
-                                channels = Math.max(1, fmt[1]);
                                 log("← " + label + "通道 MEDIA_INIT：" + fmt[0] + "Hz/" + fmt[1]
-                                        + "ch/" + fmt[2] + "bit（按此转 44.1k 立体声）");
+                                        + "ch/" + fmt[2] + "bit（只排空，不转发）");
                             }
                             continue;
                         }
                         if (len > 0 && voiceLogged == 0) {
                             voiceLogged = 1;
-                            log("← " + label + "通道有数据 len=" + len + "（开始混入车机音频）");
-                        }
-
-                        CarPlayBridge br = carPlayBridge;
-                        if (br == null) continue;
-                        byte[] stereo = com.carbridge.carplay.audio.NavVoicePcm
-                                .toStereo44k(payload, rate, channels);
-                        if (stereo == null) continue;
-                        if (voiceForwarded == 0) {
-                            int ms = com.carbridge.carplay.audio.NavVoicePcm
-                                    .durationMs(len, rate, channels, 2);
-                            log("★ " + label + "开始混入 " + len + "B ≈" + ms
-                                    + "ms@" + rate + "Hz/" + channels + "ch → "
-                                    + stereo.length + "B@44.1kHz立体声"
-                                    + (ms > 3000 ? "  ⚠ 时长异常，格式可能不是语音格式" : ""));
-                        }
-                        if (mixerBypassed) {
-                            continue;       // 旁路：只读不混（A/B 对照组）
-                        }
-                        duckMixer.submitPrompt(stereo);
-                        voiceForwarded++;
-                        // 音乐闲着就直接把提示音发出去（否则要等下一段音乐才播）
-                        if (System.currentTimeMillis() - lastMediaAudioAtMs > 300) {
-                            byte[] p = duckMixer.drainPrompt();
-                            if (p != null) {
-                                br.submitAudio(p, p.length, HuProto.mediaTimestamp(head));
-                            }
+                            log("← " + label + "通道有数据 len=" + len
+                                    + "（Car+ 已在 9240 混好，这里只排空防反压）");
                         }
                     }
                 } catch (Throwable t) {
