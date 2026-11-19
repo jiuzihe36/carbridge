@@ -133,6 +133,31 @@ public final class HuClient {
     private final Socket[] socks = new Socket[HU_SLOTS];
     private volatile int[] activePorts = HuProto.WIFI_PORTS;
     private volatile boolean videoReading;
+    /**
+     * 混音器旁路开关（A/B 用）。
+     *
+     * <p>文件 {@code <外部files>/mixer_off} 存在时，音乐**原样**送去车机、语音通道只读不混。
+     * 用来判断「压低+导航播报」到底是我们在做，还是 Car+/系统在内部做的：
+     * 旁路后如果听感不变，就说明是上游干的。
+     *
+     * <p>用文件而不是设置项：adb 直接 `touch`/`rm` 就能切，不用点界面。
+     */
+    private volatile boolean mixerBypassed;
+
+    private void refreshMixerBypass() {
+        try {
+            java.io.File f = new java.io.File(ctx.getExternalFilesDir(null), "mixer_off");
+            boolean off = f.exists();
+            if (off != mixerBypassed) {
+                mixerBypassed = off;
+                log(off ? "⚠ 混音器已旁路（mixer_off 存在）：音乐原样送出，语音只读不混"
+                        : "混音器恢复启用（mixer_off 已删除）");
+            }
+        } catch (Throwable t) {
+            com.carbridge.carplay.util.Diag.w("mixerBypass", t);
+        }
+    }
+
     /** 音乐+导航的手机侧混音器（带 ducking 增益包络）。 */
     private final com.carbridge.carplay.audio.AudioDuckingMixer duckMixer =
             new com.carbridge.carplay.audio.AudioDuckingMixer();
@@ -1735,7 +1760,9 @@ public final class HuClient {
                     } else {
                         // 音乐与导航在手机侧混好再送：接收端对 duckAudio / 第二条流不可靠，
                         // 而混音发生在编码之前，对任何档位都成立。
-                        byte[] mixed = duckMixer.mixMusic(payload, len);
+                        refreshMixerBypass();
+                        if (dataPkts % 400 == 0) refreshMixerBypass();
+                        byte[] mixed = mixerBypassed ? payload : duckMixer.mixMusic(payload, len);
                         bridge.submitAudio(mixed, len, ts);
                         if (dataPkts % 200 == 0 && duckMixer.currentGain() < 0.99f) {
                             log("音乐已压低（gain=" + String.format(java.util.Locale.US, "%.2f",
@@ -1830,6 +1857,9 @@ public final class HuClient {
                                     + "ms@" + rate + "Hz/" + channels + "ch → "
                                     + stereo.length + "B@44.1kHz立体声"
                                     + (ms > 3000 ? "  ⚠ 时长异常，格式可能不是语音格式" : ""));
+                        }
+                        if (mixerBypassed) {
+                            continue;       // 旁路：只读不混（A/B 对照组）
                         }
                         duckMixer.submitPrompt(stereo);
                         voiceForwarded++;

@@ -117,6 +117,8 @@ public final class AirPlayServer {
     private volatile byte[] telephonyKey;
     private volatile long telephonyConnId;
     private volatile int telephonyPackets;
+    // 音频电平统计
+    private long rmsSum, rmsCount, rmsLastLogMs;
     private volatile boolean sawAnnounce;
     private volatile boolean sawConfig;
 
@@ -608,6 +610,27 @@ public final class AirPlayServer {
         }
     }
 
+    /** 每 2 秒算一次音频 RMS（16bit 小端，立体声），用于客观观测「音乐有没有被压低」。 */
+    private void logAudioLevel(byte[] data, int len) {
+        long sum = 0;
+        int n = 0;
+        for (int i = 0; i + 1 < len; i += 2) {
+            short v = (short) ((data[i] & 0xFF) | (data[i + 1] << 8));
+            sum += (long) v * v;
+            n++;
+        }
+        rmsSum += sum;
+        rmsCount += n;
+        long now = System.currentTimeMillis();
+        if (now - rmsLastLogMs < 2000) return;
+        rmsLastLogMs = now;
+        if (rmsCount == 0) return;
+        long rms = (long) Math.sqrt((double) rmsSum / rmsCount);
+        emit("[ap] 音频电平 RMS=" + rms + "（样本 " + rmsCount + "）");
+        rmsSum = 0;
+        rmsCount = 0;
+    }
+
     private void audioLoop() {
         byte[] buf = new byte[4096];
         while (running) {
@@ -638,6 +661,7 @@ public final class AirPlayServer {
                     if (audioPackets <= 2) {
                         emit("[ap] 音频解密 OK " + plain.length + "B");
                     }
+                    logAudioLevel(plain, plain.length);
                     playPcm(plain);
                 } catch (Exception e) {
                     // 音频解密失败不致命，静默
