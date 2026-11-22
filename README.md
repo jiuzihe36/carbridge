@@ -53,6 +53,17 @@ export ANDROID_SDK_ROOT=$HOME/android-sdk
 顺序不能反：只删手机侧，车机会保留旧 link key，不会重新查 SDP。
 改过版本或换过配对，建议重启一次车机再重新配对。
 
+### 车机一键解锁（免电脑）
+
+车机判「这台手机算不算 CarPlay 设备」还有第二条路：系统属性
+`persist.sys.wirelesscarplay.address` 等于手机蓝牙 MAC 时，车机的 CarPlay 应用
+直接把它放进设备列表，**不检查配对时的 SDP 缓存**。
+
+App 里「本机身份 → 车机一键解锁（免电脑）」会自己做完：扫网段找车机 → 内置 adb
+连进去（用的是车机已经信任的那把密钥）→ 写属性并回读校验 → 重启车机 CarPlay 应用
+→ 把车机最近的 `isSupportCarplay` 判定日志抓回来。跑完只剩一步：到车机上点列表里
+这台手机。前提是手机已连上车机热点。
+
 ## 目录
 
 ```

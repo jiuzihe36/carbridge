@@ -43,6 +43,7 @@ fi
   --min-sdk-version 26 \
   --target-sdk-version 35 \
   --auto-add-overlay \
+  -A "$APP/assets" \
   "$OUT/res.zip"
 
 find "$APP/java" "$OUT/gen" -name '*.java' | LC_ALL=C sort > "$OUT/sources.txt"

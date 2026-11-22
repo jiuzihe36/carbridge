@@ -216,6 +216,12 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                 @Override public void onClick(View v) { showRepairDialog(); }
             });
         }
+        View rowCarSide = findViewById(R.id.row_car_side);
+        if (rowCarSide != null) {
+            rowCarSide.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { showCarSideDialog(); }
+            });
+        }
         installCrashLogger();
         // 首次启动自动打开 3 步向导（只弹一次）
         try {
@@ -1305,6 +1311,68 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         } catch (Throwable t) {
             log("✗ 打不开蓝牙设置页：" + t);
         }
+    }
+
+    /**
+     * 「车机一键解锁（免电脑）」：手机自己连车机热点、自己 adb 进车机，把 CarPlay 后门写上。
+     *
+     * <p>为什么需要它：车机判「这台手机算不算 CarPlay 设备」还有第二条路 ——
+     * 系统属性 {@code persist.sys.wirelesscarplay.address} 等于手机蓝牙 MAC 时，
+     * CarPlay 应用会把它直接放进设备列表，<b>不检查 SDP 里的 2d8d2466</b>。
+     * 这条后门只有 adb 能写，而用户不方便把电脑带到车上，所以内置一个最小 adb 客户端。
+     *
+     * <p>车机的 adbd 早先信任过 Mac 的密钥，包里带的就是同一把，因此正常情况下
+     * 不需要在车机屏幕上点「允许调试」。
+     */
+    private void showCarSideDialog() {
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.btn_car_side)
+                .setMessage(R.string.car_side_msg)
+                .setPositiveButton(R.string.car_side_run, new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        runCarSideSetup();
+                    }
+                })
+                .setNegativeButton(R.string.repair_cancel, null)
+                .show();
+    }
+
+    /** 后台跑车机侧流程：扫网段 → adb 连接 → 写属性 → 重启车机 CarPlay 应用。 */
+    private void runCarSideSetup() {
+        final String mac = com.carbridge.carplay.bt.BtIdentity.peek(this).ok()
+                ? com.carbridge.carplay.bt.BtIdentity.peek(this).mac
+                : com.carbridge.carplay.bt.BtIdentity.resolve(this, false).mac;
+        if (mac == null) {
+            Toast.makeText(this, "读不到本机蓝牙地址", Toast.LENGTH_LONG).show();
+            return;
+        }
+        Toast.makeText(this, R.string.car_side_running, Toast.LENGTH_LONG).show();
+        log("── 车机一键解锁（免电脑）──");
+        log("本机蓝牙 MAC：" + mac);
+        com.carbridge.carplay.util.Bg.run("car-side", new Runnable() {
+            @Override
+            public void run() {
+                final com.carbridge.car.CarSideSetup.Result r =
+                        com.carbridge.car.CarSideSetup.run(MainActivity.this, mac,
+                                new com.carbridge.car.CarSideSetup.Log() {
+                                    @Override
+                                    public void log(String line) {
+                                        MainActivity.this.log(line);
+                                    }
+                                });
+                log((r.ok ? "✓ " : "✗ ") + r.message);
+                final String msg = r.ok ? r.message : MainActivity.this.getString(R.string.car_side_fail)
+                        + "（" + r.message + "）";
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        Toast.makeText(MainActivity.this, msg, Toast.LENGTH_LONG).show();
+                        refreshIdentity();
+                    }
+                });
+            }
+        });
     }
 
     /** 版本号只从 PackageInfo 读：日志里对得上装的是哪一版，手写一定会漂。 */
