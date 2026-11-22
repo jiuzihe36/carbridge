@@ -113,12 +113,14 @@
     <string name="probe_stop">停止探测</string>
     <string name="probe_on">探测中</string>
     <string name="probe_off">已关闭</string>
-    <string name="repair_msg">车机只在自己「配对」的那一刻查一次 SDP。第一次配对时，我们的 CarPlay 信标还没挂上，所以它一直认不出本机。\n\n点「清除配对」会解除手机与车机（%1$s）的配对记录，然后请按顺序操作：\n\n1　车机 → 设置 → 蓝牙 → 删掉本机\n2　手机 → 设置 → 蓝牙 → 删掉车机\n3　重新配对一次（配对前让手机保持「可被发现」）\n\n重新配对时车机重新查 SDP，就能认出这台「iPhone」，并把它记下来，以后一直是绿的。</string>
+    <string name="repair_msg">车机只在「配对」那一刻读一次手机的蓝牙服务记录（SDP），之后一直吃旧缓存。这台车缓存的是「普通手机」，所以 Apple CarPlay 一直是灰的 —— 不重配一次，信标挂得再好它也不会重看。&#10;&#10;点「清除配对」会：解除手机与车机（%1$s）的配对，并打开手机蓝牙设置页（此时手机可被车机发现，约 120 秒）。&#10;&#10;然后在车上按顺序做：&#10;1　车机 → 设置 → 蓝牙 → 已配对设备里删掉本机（车机侧不删，它会一直保留旧记录）&#10;2　车机 → 搜索设备 → 选这台手机 → 配对 → 手机上点「配对」&#10;3　配对完回车机桌面点「Apple CarPlay」</string>
     <string name="repair_ok">清除配对</string>
     <string name="repair_cancel">取消</string>
     <string name="repair_done">手机端配对已清除，请到车机重新配对</string>
     <string name="repair_failed">清除失败，请到系统蓝牙设置里手动取消配对</string>
     <string name="repair_no_car">已配对设备里没找到车机</string>
+    <string name="repair_no_car_msg">现在没有已配对的车机（手机侧已经清过了）。&#10;&#10;下一步在车上：车机 → 设置 → 蓝牙 → 搜索设备 → 选这台手机 → 配对（手机上点「配对」）。&#10;&#10;点下面按钮会打开手机蓝牙设置页：打开期间本机可被车机发现，约 120 秒，别退出这个页面。</string>
+    <string name="repair_open_bt">打开蓝牙设置页</string>
     <string name="repair_no_beacon">CarPlay 信标没在跑，先别重配：请确认蓝牙已开、权限已给，再试一次</string>
     <!-- ── 本机身份（车机识别三要素） ── -->
     <string name="section_identity">本机身份</string>

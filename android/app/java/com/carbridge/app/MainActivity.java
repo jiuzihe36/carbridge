@@ -177,7 +177,7 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         applyWindowInsets();
         requestRuntimePermissions();
         startCarPlayBeacon();
-        log("carbridge v0.1.1 启动，日志文件: " + logFile().getAbsolutePath());
+        log("carbridge v" + appVersion() + " 启动，日志文件: " + logFile().getAbsolutePath());
         stateView = (TextView) findViewById(R.id.state);
         detailView = (TextView) findViewById(R.id.detail);
         logView = (TextView) findViewById(R.id.log);
@@ -208,6 +208,12 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         if (rowSrcvers != null) {
             rowSrcvers.setOnClickListener(new View.OnClickListener() {
                 @Override public void onClick(View v) { showSrcversDialog(); }
+            });
+        }
+        View rowRepair = findViewById(R.id.row_repair);
+        if (rowRepair != null) {
+            rowRepair.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { showRepairDialog(); }
             });
         }
         installCrashLogger();
@@ -1203,6 +1209,111 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         CarPlayCtrlCompat.apply(this);
         log("广播版本 srcvers = " + value + "（下次连接生效）");
         refreshIdentity();
+    }
+
+    /**
+     * 「重新配对车机」：车机只在**配对那一刻**查一次 SDP，之后一直吃缓存。
+     *
+     * <p>现场最常见的一种坏状态：车机在 App 装好之前就和这台手机配对过，
+     * 它缓存下来的结论是「普通手机，不支持 CarPlay」—— 之后信标挂得再好也
+     * 不会变绿，因为车机根本不重查。唯一解法是**两边都删掉配对、在信标已注册
+     * 的状态下重配一次**。
+     *
+     * <p>这个入口只做三件事：确认信标在跑 → 清手机侧配对 → 打开蓝牙设置页
+     * （Android 14+ 唯一能让本机重新可被车机发现的地方，且只有约 120 秒）。
+     */
+    private void showRepairDialog() {
+        if (!CarPlaySdpBeacon.isStarted()) {
+            // 信标没跑的时候重配 = 把唯一一次机会浪费掉，先拦住
+            Toast.makeText(this, R.string.repair_no_beacon, Toast.LENGTH_LONG).show();
+            log("✗ 重新配对中止：SDP 信标没在跑（先确认蓝牙已开、权限已给）");
+            return;
+        }
+        final android.bluetooth.BluetoothDevice car = CarPairing.findCar();
+        if (car == null) {
+            // 已经清过配对、只是还没和车机重配上 —— 这一步不该是死路：
+            // 直接把「让车机发现本机」的窗口打开（蓝牙设置页 = 可被发现）
+            log("• 现在没有已配对的车机：打开蓝牙设置页，等车机来搜本机");
+            new AlertDialog.Builder(this)
+                    .setTitle(R.string.btn_repair)
+                    .setMessage(R.string.repair_no_car_msg)
+                    .setPositiveButton(R.string.repair_open_bt, new DialogInterface.OnClickListener() {
+                        @Override
+                        public void onClick(DialogInterface dialog, int which) {
+                            openBluetoothSettings();
+                        }
+                    })
+                    .setNegativeButton(R.string.repair_cancel, null)
+                    .show();
+            return;
+        }
+        String carName = null;
+        try {
+            carName = car.getName();
+        } catch (Throwable ignored) {
+        }
+        if (carName == null || carName.length() == 0) carName = car.getAddress();
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.btn_repair)
+                .setMessage(getString(R.string.repair_msg, carName))
+                .setPositiveButton(R.string.repair_ok, new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        doRepair(car);
+                    }
+                })
+                .setNegativeButton(R.string.repair_cancel, null)
+                .show();
+    }
+
+    /** 真正执行：清手机侧配对 → 打开蓝牙设置页（进入可被发现窗口）。 */
+    private void doRepair(android.bluetooth.BluetoothDevice car) {
+        log("── 重新配对车机 ──");
+        log("① 信标：" + CarPlaySdpBeacon.statusLine());
+        boolean ok = CarPairing.forgetCar(car, new CarPairing.Log() {
+            @Override
+            public void onLog(String line) {
+                log("② " + line);
+            }
+        });
+        if (ok) {
+            log("③ 手机侧配对已清除。接下来必须**从车机发起**搜索配对，手机不能主动点车机");
+            log("   车机侧也要删掉本机 —— 只删手机侧，车机保留旧 link key，不会重查 SDP");
+            log("   蓝牙设置页马上打开：打开期间本机可被车机发现，约 120 秒");
+            Toast.makeText(this, R.string.repair_done, Toast.LENGTH_LONG).show();
+        } else {
+            log("③ 手机侧解绑失败：到「设置 → 蓝牙」手动取消配对车机，然后重来");
+            Toast.makeText(this, R.string.repair_failed, Toast.LENGTH_LONG).show();
+        }
+        openBluetoothSettings();
+        refreshIdentity();
+    }
+
+    /**
+     * 打开系统蓝牙设置页。
+     *
+     * <p>这不是「顺手跳一下」：Android 14+ 起把本机设为可被发现的方法已被框架删除
+     * （{@code setDiscoverable} 抛 NoSuchMethodException），而**打开蓝牙设置页会让
+     * 系统把本机置成 SCAN_MODE_CONNECTABLE_DISCOVERABLE**——这是普通 App 唯一还能
+     * 让车机在搜索里看见本机的入口。
+     */
+    private void openBluetoothSettings() {
+        try {
+            Intent i = new Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+        } catch (Throwable t) {
+            log("✗ 打不开蓝牙设置页：" + t);
+        }
+    }
+
+    /** 版本号只从 PackageInfo 读：日志里对得上装的是哪一版，手写一定会漂。 */
+    private String appVersion() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Throwable t) {
+            return "?";
+        }
     }
 
     private void scheduleLogUiRefresh() {

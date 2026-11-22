@@ -5,7 +5,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 APP="$ROOT/app"
 OUT="$ROOT/build"
-VER="0.1.0"
+# 版本号只认 AndroidManifest，别在这里再手写一份（以前两处会漂）
+VER="$(grep -o 'android:versionName="[^"]*"' "$ROOT/app/AndroidManifest.xml" | head -1 | sed 's/.*="//; s/"$//')"
+[ -n "$VER" ] || { echo "读不到 versionName" >&2; exit 1; }
 
 SDK="${ANDROID_SDK_ROOT:-$HOME/android-sdk}"
 BT="$(ls -d "$SDK"/build-tools/*/ 2>/dev/null | sort -V | tail -1)"

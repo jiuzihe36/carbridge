@@ -368,6 +368,40 @@
                             android:src="@drawable/ic_chevron_right"
                             android:tint="@color/text_muted" />
                     </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:layout_marginStart="16dp"
+                        android:background="@color/divider" />
+
+                    <!-- 重新配对车机：车机只在配对那一刻查 SDP，缓存旧了只能重配 -->
+                    <LinearLayout
+                        android:id="@+id/row_repair"
+                        android:layout_width="match_parent"
+                        android:layout_height="48dp"
+                        android:background="?android:attr/selectableItemBackground"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingStart="16dp"
+                        android:paddingEnd="12dp">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="@string/btn_repair"
+                            android:textColor="@color/accent"
+                            android:textSize="15sp" />
+
+                        <ImageView
+                            android:layout_width="14dp"
+                            android:layout_height="14dp"
+                            android:layout_marginStart="6dp"
+                            android:contentDescription="@null"
+                            android:src="@drawable/ic_chevron_right"
+                            android:tint="@color/text_muted" />
+                    </LinearLayout>
                 </LinearLayout>
 
                 <!-- ── 分组：设置 ── -->
