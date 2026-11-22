@@ -1729,7 +1729,10 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                 android.bluetooth.BluetoothDevice.ACTION_BOND_STATE_CHANGED);
         try {
             if (Build.VERSION.SDK_INT >= 33) {
-                registerReceiver(bondReceiver, f, Context.RECEIVER_NOT_EXPORTED);
+                // ⚠️ 必须 EXPORTED：ACTION_BOND_STATE_CHANGED 是蓝牙栈（另一个进程）发的，
+                //    NOT_EXPORTED 收不到 —— 实测 removeBond 之后一条广播都没进来，
+                //    于是「配对那一刻信标在不在」这个最关键的证据永远是空的。
+                registerReceiver(bondReceiver, f, Context.RECEIVER_EXPORTED);
             } else {
                 registerReceiver(bondReceiver, f);
             }
