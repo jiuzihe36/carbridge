@@ -124,6 +124,12 @@
     <string name="btn_car_side">车机一键解锁（免电脑）</string>
     <string name="car_side_msg">手机自己连车机热点、自己进车机，把 CarPlay 那条后门写上。&#10;&#10;前提：手机已连上车机热点（xiaohu）。车身通电、车机开机。&#10;&#10;作用：车机的 CarPlay 应用除了看配对时的蓝牙服务记录，还会认「上一次连接的手机地址」这个系统属性。写进去之后，即使「支持无线 CarPlay」那行是灰的，CarPlay 列表里也会出现这台手机。&#10;&#10;跑完你要做的只有一步：到车机上点列表里这台手机。</string>
     <string name="car_side_run">开始</string>
+    <string name="btn_pair_scan">搜索并配对车机</string>
+    <string name="pair_scan_hint">正在搜索附近设备，约 12 秒…</string>
+    <string name="pair_scan_empty">没搜到设备。先把车机蓝牙打开、停在「搜索设备」页，再试一次</string>
+    <string name="pair_scan_pick">选车机（点一下就开始配对）</string>
+    <string name="pair_started">已发起配对：手机上点「配对」，配对成功后到车机上点这台手机</string>
+    <string name="pair_start_failed">发起配对失败（设备可能已配对或蓝牙忙）</string>
     <string name="car_side_running">正在连车机，别退出…</string>
     <string name="car_side_fail">车机没连上：先确认手机连的是车机热点（xiaohu）、车身已通电</string>
     <string name="repair_no_beacon">CarPlay 信标没在跑，先别重配：请确认蓝牙已开、权限已给，再试一次</string>

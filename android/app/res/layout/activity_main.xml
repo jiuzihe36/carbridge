@@ -409,6 +409,40 @@
                         android:layout_marginStart="16dp"
                         android:background="@color/divider" />
 
+                    <!-- 搜索并配对：mcarplay 的做法——配对由 App 发起，保证配对那一刻信标在跑 -->
+                    <LinearLayout
+                        android:id="@+id/row_pair_scan"
+                        android:layout_width="match_parent"
+                        android:layout_height="48dp"
+                        android:background="?android:attr/selectableItemBackground"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingStart="16dp"
+                        android:paddingEnd="12dp">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="@string/btn_pair_scan"
+                            android:textColor="@color/accent"
+                            android:textSize="15sp" />
+
+                        <ImageView
+                            android:layout_width="14dp"
+                            android:layout_height="14dp"
+                            android:layout_marginStart="6dp"
+                            android:contentDescription="@null"
+                            android:src="@drawable/ic_chevron_right"
+                            android:tint="@color/text_muted" />
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:layout_marginStart="16dp"
+                        android:background="@color/divider" />
+
                     <!-- 车机一键解锁：手机自己 adb 进车机写 CarPlay 后门，不需要电脑 -->
                     <LinearLayout
                         android:id="@+id/row_car_side"

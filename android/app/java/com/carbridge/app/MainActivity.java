@@ -216,6 +216,12 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                 @Override public void onClick(View v) { showRepairDialog(); }
             });
         }
+        View rowPairScan = findViewById(R.id.row_pair_scan);
+        if (rowPairScan != null) {
+            rowPairScan.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { showPairScanDialog(); }
+            });
+        }
         View rowCarSide = findViewById(R.id.row_car_side);
         if (rowCarSide != null) {
             rowCarSide.setOnClickListener(new View.OnClickListener() {
@@ -1310,6 +1316,179 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
             startActivity(i);
         } catch (Throwable t) {
             log("✗ 打不开蓝牙设置页：" + t);
+        }
+    }
+
+    /**
+     * 「搜索并配对车机」：配对由 App 发起 —— 这是 mcarplay 那边唯一和我们不一样的
+     * 实操差异（它的 SDP 注册代码和我们逐行相同，没有 root、没有 EIR、没有后门）。
+     *
+     * <p>为什么这么重要：车机只在**配对那一刻**读一次我们的 SDP。从系统蓝牙设置里
+     * 配对时，用户可能先退出了 App、或系统先做了别的事，时序不受我们控制；
+     * 从 App 里发起，就能保证「信标已在跑 → 再 createBond」这个顺序。
+     */
+    private void showPairScanDialog() {
+        android.bluetooth.BluetoothAdapter adapter = com.carbridge.carplay.bt.Bt.adapter(this);
+        if (adapter == null || !adapter.isEnabled()) {
+            Toast.makeText(this, "蓝牙没开", Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (!CarPlaySdpBeacon.isStarted()) {
+            Toast.makeText(this, R.string.repair_no_beacon, Toast.LENGTH_LONG).show();
+            log("✗ 配对中止：SDP 信标没在跑（先确认蓝牙已开、权限已给）");
+            return;
+        }
+        log("── 搜索并配对车机（App 内发起）──");
+        log("① 信标：" + CarPlaySdpBeacon.statusLine() + " —— 配对那一刻它必须在跑");
+        Toast.makeText(this, R.string.pair_scan_hint, Toast.LENGTH_LONG).show();
+        startPairScan(adapter);
+    }
+
+    /** 后台扫 12 秒，收设备，再把结果丢回主线程让用户点。 */
+    private void startPairScan(final android.bluetooth.BluetoothAdapter adapter) {
+        com.carbridge.carplay.util.Bg.run("pair-scan", new Runnable() {
+            @Override
+            public void run() {
+                final List<android.bluetooth.BluetoothDevice> found =
+                        new ArrayList<android.bluetooth.BluetoothDevice>();
+                android.content.BroadcastReceiver receiver = new android.content.BroadcastReceiver() {
+                    @Override
+                    public void onReceive(Context context, Intent intent) {
+                        if (!android.bluetooth.BluetoothDevice.ACTION_FOUND.equals(intent.getAction())) {
+                            return;
+                        }
+                        android.bluetooth.BluetoothDevice d =
+                                intent.getParcelableExtra(android.bluetooth.BluetoothDevice.EXTRA_DEVICE);
+                        if (d == null) return;
+                        for (android.bluetooth.BluetoothDevice x : found) {
+                            if (x.getAddress() != null && x.getAddress().equals(d.getAddress())) return;
+                        }
+                        found.add(d);
+                    }
+                };
+                android.content.IntentFilter f = new android.content.IntentFilter(
+                        android.bluetooth.BluetoothDevice.ACTION_FOUND);
+                try {
+                    // 系统广播（蓝牙栈发的）必须 EXPORTED，否则一条都收不到
+                    registerReceiver(receiver, f, Context.RECEIVER_EXPORTED);
+                } catch (Throwable t) {
+                    log("✗ 注册扫描监听失败：" + t);
+                    return;
+                }
+                try {
+                    adapter.cancelDiscovery();
+                    boolean started = adapter.startDiscovery();
+                    log("② 开始搜索（startDiscovery=" + started + "），最多等 12 秒");
+                    for (int i = 0; i < 24; i++) {
+                        Thread.sleep(500);
+                        if (found.size() > 0 && i > 12) break;
+                    }
+                } catch (Throwable t) {
+                    log("✗ 搜索失败：" + t);
+                } finally {
+                    try {
+                        adapter.cancelDiscovery();
+                    } catch (Throwable ignored) {
+                    }
+                    try {
+                        unregisterReceiver(receiver);
+                    } catch (Throwable ignored) {
+                    }
+                }
+                log("③ 搜到 " + found.size() + " 个设备");
+                final List<android.bluetooth.BluetoothDevice> result =
+                        new ArrayList<android.bluetooth.BluetoothDevice>(found);
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        showPairScanResult(result);
+                    }
+                });
+            }
+        });
+    }
+
+    /** 把搜到的设备列出来（车机排前面），点一个就 createBond。 */
+    private void showPairScanResult(List<android.bluetooth.BluetoothDevice> devices) {
+        if (devices == null || devices.isEmpty()) {
+            Toast.makeText(this, R.string.pair_scan_empty, Toast.LENGTH_LONG).show();
+            return;
+        }
+        final List<android.bluetooth.BluetoothDevice> sorted =
+                new ArrayList<android.bluetooth.BluetoothDevice>(devices);
+        java.util.Collections.sort(sorted, new java.util.Comparator<android.bluetooth.BluetoothDevice>() {
+            @Override
+            public int compare(android.bluetooth.BluetoothDevice a, android.bluetooth.BluetoothDevice b) {
+                return (isLikelyCar(b) ? 1 : 0) - (isLikelyCar(a) ? 1 : 0);
+            }
+        });
+        final List<String> labels = new ArrayList<String>();
+        for (android.bluetooth.BluetoothDevice d : sorted) {
+            String name = null;
+            try {
+                name = d.getName();
+            } catch (Throwable ignored) {
+            }
+            String addr = "";
+            try {
+                addr = d.getAddress();
+            } catch (Throwable ignored) {
+            }
+            labels.add((isLikelyCar(d) ? "🚗 " : "") + (name == null ? "(无名)" : name)
+                    + "  " + addr);
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.pair_scan_pick)
+                .setItems(labels.toArray(new CharSequence[0]), new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        beginBond(sorted.get(which));
+                    }
+                })
+                .setNegativeButton(R.string.repair_cancel, null)
+                .show();
+    }
+
+    /** 粗略判「这像不像车机」：名字带车机特征，或 CoD 是车载音频。 */
+    private static boolean isLikelyCar(android.bluetooth.BluetoothDevice d) {
+        try {
+            String n = d.getName();
+            if (n != null) {
+                String s = n.toLowerCase(Locale.US);
+                if (s.contains("cloudrive") || s.contains("tiggo") || s.contains("chery")
+                        || s.contains("carplay") || s.contains("desay") || s.contains("byd")
+                        || s.contains("geely") || s.contains("audi") || s.contains("bmw")) {
+                    return true;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            int cod = d.getBluetoothClass() == null ? 0 : d.getBluetoothClass().getDeviceClass();
+            return ((cod >> 8) & 0x1F) == 0x04;   // 音视频大类：车载音响/免提
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
+
+    /** 发起配对。配对成功后的提示由 bond watcher 负责（它现在能收到广播了）。 */
+    private void beginBond(final android.bluetooth.BluetoothDevice device) {
+        String name = null;
+        String addr = "";
+        try {
+            name = device.getName();
+            addr = device.getAddress();
+        } catch (Throwable ignored) {
+        }
+        log("④ 发起配对：" + (name == null ? "(无名)" : name) + " [" + addr + "]");
+        try {
+            boolean ok = device.createBond();
+            log(ok ? "⑤ createBond() 已发起 —— 手机弹窗点「配对」" : "✗ createBond() 返回 false");
+            Toast.makeText(this, ok ? R.string.pair_started : R.string.pair_start_failed,
+                    Toast.LENGTH_LONG).show();
+        } catch (Throwable t) {
+            log("✗ createBond 异常：" + t);
+            Toast.makeText(this, R.string.pair_start_failed, Toast.LENGTH_LONG).show();
         }
     }
 
