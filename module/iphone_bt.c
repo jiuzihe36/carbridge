@@ -120,7 +120,13 @@ static int hci_open(void) {
     addr.hci_dev = 0;
     addr.hci_channel = HCI_CHANNEL_RAW;
     if (bind(fd, (struct sockaddr *) &addr, sizeof addr) < 0) {
-        logline("bind(hci0) 失败: %s", strerror(errno));
+        if (errno == ENODEV) {
+            logline("本机内核没有暴露 HCI 设备（hci_uart refcount=0、/sys/class/bluetooth 为空）");
+            logline("⇒ 这台的蓝牙是「用户态直驱 UART」（高通常见形态），raw HCI 用不了");
+            logline("⇒ EIR 注入在这个 ROM 上不可行，需要 hook 蓝牙进程，不是命令能解决的");
+        } else {
+            logline("bind(hci0) 失败: %s", strerror(errno));
+        }
         close(fd);
         return -1;
     }
@@ -246,6 +252,7 @@ int main(int argc, char **argv) {
     int interval = 2;
     int full = 0;
     int dump_eir = 0;
+    int probe = 0;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--loop") && i + 1 < argc) {
@@ -258,6 +265,8 @@ int main(int argc, char **argv) {
             name = argv[++i];
         } else if (!strcmp(argv[i], "--cod") && i + 1 < argc) {
             cod = (uint32_t) strtoul(argv[++i], NULL, 0);
+        } else if (!strcmp(argv[i], "--probe")) {
+            probe = 1;
         } else if (!strcmp(argv[i], "--dump-eir")) {
             dump_eir = 1;
         } else if (!strcmp(argv[i], "--full")) {
@@ -267,6 +276,14 @@ int main(int argc, char **argv) {
                     "usage: iphone_bt [--apply|--loop N] [--name NAME] [--cod 0x5A020C] [--full]\n");
             return 2;
         }
+    }
+
+    if (probe) {
+        int fd = hci_open();
+        if (fd < 0) return 3;
+        close(fd);
+        logline("HCI 可用（hci0 可 bind），可以注入");
+        return 0;
     }
 
     if (dump_eir) {

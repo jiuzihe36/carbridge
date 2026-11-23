@@ -1,29 +1,30 @@
 #!/system/bin/sh
-# late_start 服务模式：等蓝牙起来，然后把身份写进控制器并常驻刷新。
+# late_start 服务模式：先探一次「本机到底有没有 HCI 设备」，再决定要不要常驻。
 #
-# 为什么必须常驻刷新：AOSP 在「可发现状态变化 / 蓝牙开关 / SDP 服务增删」时会重新
-# 下发 EIR，把我们写进去的 128 位 UUID 覆盖掉。单次写入 = 车机下一次 inquiry 就
-# 看不到 CarPlay 标记了。
+# 为什么要先探：很多高通机型的蓝牙是**用户态直驱 UART**（hci_uart 模块 refcount=0、
+# /sys/class/bluetooth 为空），内核根本没有 hci0 —— 这种情况下 raw HCI 注入不可用，
+# 再循环重试也只是每分钟刷一行日志，必须一次性说清楚并退出。
 MODDIR=${0%/*}
 BIN="$MODDIR/bin/iphone_bt"
 LOG=/data/local/tmp/iphone_bt.log
 
-# 只留一个实例（模块更新 / 重启脚本时都可能残留）
 pkill -f "iphone_bt --loop" 2>/dev/null
 sleep 1
-
 echo "---- $(date) service.sh 启动 ----" >> "$LOG"
 
-# 等蓝牙进程起来（最多 4 分钟）：开机阶段 Airplane / 省电策略都可能还没拉起它
+# 等蓝牙进程起来（最多 4 分钟）
 i=0
 while [ $i -lt 120 ]; do
-  if pidof com.android.bluetooth >/dev/null 2>&1; then
-    echo "$(date) 蓝牙进程已就绪（等了 ${i} 轮）" >> "$LOG"
-    break
-  fi
+  if pidof com.android.bluetooth >/dev/null 2>&1; then break; fi
   sleep 2
   i=$((i + 1))
 done
+
+"$BIN" --probe >> "$LOG" 2>&1
+if [ $? -ne 0 ]; then
+  echo "$(date) 本机没有可用的 HCI 设备 → 模块不启动（EIR 注入需要 hook 蓝牙进程，不是本模块能做的）" >> "$LOG"
+  exit 0
+fi
 
 "$BIN" --loop 2 >> "$LOG" 2>&1 &
 echo $! > /data/local/tmp/iphone_bt.pid

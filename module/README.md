@@ -80,6 +80,26 @@ sudo btmon | grep -i "1a 29 ea ab"      # 或 bluetoothctl → scan on，看 EIR
   CoD / 名字 / EIR 全部按它自己的配置重写回来，手机立刻恢复原样。
 - 也可以手动 `adb shell su -c "pkill -f iphone_bt"` 再关开一次蓝牙。
 
+## 本机实测：一加 Ace 5（ColorOS 17 / Android 17）用不了，原因是内核层面
+
+这台机器的蓝牙是**用户态直驱 UART**，内核没有 HCI 设备，raw HCI 无从下发：
+
+```
+su -c 'cat /proc/modules | grep hci_uart'   →  hci_uart 81920 0 - Live   （refcount=0，没挂上）
+su -c 'ls -la /sys/class/bluetooth/'        →  空
+su -c 'ls /dev | grep -i bt'                →  bt_cp_ctrl / btfmslim / btpower / ttyHS0
+bind(hci, dev=0..3, channel=RAW/USER/MONITOR/CONTROL)  →  全是 ENODEV
+```
+
+⇒ 在这种 ROM 上，EIR 只能靠**hook 蓝牙进程**（Zygisk + native hook 掉 HCI 发送路径），
+不是一个 shell 模块能做到的。模块已经内置 `--probe`：探不到 HCI 就写一行原因退出，
+不会每 30 秒刷日志。
+
+**先确认车机到底要不要 EIR 再决定要不要做 hook**：奇瑞/德赛这一代判的是配对时的
+`getUuids()`（SDP 缓存），参考实现在同族车机上只靠 SDP 就把 `isSupportCarplay()` 从
+false 翻成 true。判据就一条——按 SDP 正确配对后，车机设置里那行
+「(支持无线 CarPlay 连接)」出不出来。
+
 ## 边界（写清楚，别期待它做不到的事）
 
 - 只解决**射频层身份**。SDP 记录（`…cafe` / `2d8d2466`）仍由 carbridge App 注册；iAP2 字段、
