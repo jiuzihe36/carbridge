@@ -165,16 +165,19 @@ public final class CarPlaySdpBeacon {
                 emit(log, "SDP 信标: 蓝牙未开启，等开启后再注册");
                 return false;
             }
-            // ① 车机认「这是 iPhone」的标记
-            BluetoothServerSocket server = adapter.listenUsingRfcommWithServiceRecord(
-                    SERVICE_NAME, APPLE_DEVICE_UUID);
-            SERVERS.add(server);
-            REGISTERED.add(APPLE_DEVICE_UUID);
-            // ② 车机真正会连过来的 iAP2 服务 —— 必须和 ① 同时在场
+            // ① 车机真正会连过来的 iAP2 服务
+            //    ⚠️ 顺序有意义：实测本机（ColorOS/Android 17）蓝牙栈给**第一条**记录
+            //    建出来的 SDP 缺 0x0100 服务名，第二条起才带名字。mcarplay 的注册顺序
+            //    也是先 iAP2 后 CarPlay（PhoneSdpRecords.open），这里对齐它。
             BluetoothServerSocket iap2 = adapter.listenUsingRfcommWithServiceRecord(
                     IAP2_SERVICE_NAME, IPHONE_IAP2_UUID);
             SERVERS.add(iap2);
             REGISTERED.add(IPHONE_IAP2_UUID);
+            // ② 车机认「这是 iPhone」的标记 —— 必须和 ① 同时在场
+            BluetoothServerSocket server = adapter.listenUsingRfcommWithServiceRecord(
+                    SERVICE_NAME, APPLE_DEVICE_UUID);
+            SERVERS.add(server);
+            REGISTERED.add(APPLE_DEVICE_UUID);
             // ③ 参考车机 的车机实际连接的是「笔误版」UUID：
             //    00000000-CADE-DEFA-DECA-DEAFDECACAFE。
             //    这条和标准 …deca-fade…CAFE 是两条独立的 SDP 记录，必须同时挂着；
