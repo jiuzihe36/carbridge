@@ -180,4 +180,5 @@
     <string name="guide_beacon_check">开始检测</string>
     <string name="help_export_diag">导出诊断包（日志+身份+配置）</string>
     <string name="help_autoreconnect">自动重连</string>
+    <string name="verbose_trace_title">详细协议日志</string>
 </resources>

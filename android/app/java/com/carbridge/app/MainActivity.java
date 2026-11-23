@@ -151,6 +151,8 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         }
         // 自保护：签名钉死 / 反调试 / 反 hook。命中即 halt，所以放在最前面。
         installCrashProbe();
+        com.carbridge.app.HuClient.verboseTrace =
+                getSharedPreferences(PREF_NAME, MODE_PRIVATE).getBoolean(KEY_VERBOSE_TRACE, false);
         // 上次被系统杀掉时可能没恢复本机铃声（车机模式会把 ring 音量压到 0）→ 先补回来
         com.carbridge.carplay.audio.CarAudioRouter.restoreIfMutedOnStart(this, new com.carbridge.carplay.audio.CarAudioRouter.Log() {
             @Override
@@ -446,6 +448,20 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         editWidth = (EditText) findViewById(R.id.edit_width);
         editHeight = (EditText) findViewById(R.id.edit_height);
         qualityTargetView = (TextView) findViewById(R.id.quality_target);
+        // 详细协议日志开关（默认关）。逐帧 trace 一天能占掉八九成日志体积。
+        CheckBox swTrace = (CheckBox) findViewById(R.id.switch_verbose_trace);
+        if (swTrace != null) {
+            swTrace.setChecked(com.carbridge.app.HuClient.verboseTrace);
+            swTrace.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
+                @Override
+                public void onCheckedChanged(android.widget.CompoundButton b, boolean checked) {
+                    com.carbridge.app.HuClient.verboseTrace = checked;
+                    getSharedPreferences(PREF_NAME, MODE_PRIVATE).edit()
+                            .putBoolean(KEY_VERBOSE_TRACE, checked).apply();
+                    log(checked ? "详细协议日志：开（逐帧 trace，体积会明显变大）" : "详细协议日志：关");
+                }
+            });
+        }
         switchAutoFit = (CheckBox) findViewById(R.id.switch_auto_fit);
         if (editWidth != null) editWidth.setText(String.valueOf(encWidth));
         if (editHeight != null) editHeight.setText(String.valueOf(encHeight));
@@ -853,8 +869,10 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
 
     private static final int LOG_MEM_CHARS = 120 * 1024;
     private static final int LOG_UI_TAIL = 250;
-    private static final long LOG_FILE_MAX = 2 * 1024 * 1024;
+    private static final long LOG_FILE_MAX = 1024 * 1024;   // 1 MB：够排查一次会话，滚成 .1 保留上一份
     private static final String LOG_FILE_NAME = "carbridge-session.log";
+    /** 逐帧协议日志（默认关）。排查偶发问题才开，开一天能让日志涨十倍。 */
+    private static final String KEY_VERBOSE_TRACE = "verbose_trace";
     private int logChars;
     private FileOutputStream logFileOut;
     private boolean logFileTried;
@@ -1610,7 +1628,7 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                     logFileTried = true;
                     File f = logFile();
                     if (f.isFile() && f.length() > LOG_FILE_MAX) {
-                        truncateLogFileHead(f);
+                        rotateLogFile(f);
                     }
                     logFileOut = new FileOutputStream(f, true);
                 }
@@ -1666,6 +1684,27 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
     private File logFile() {
         return sessionLog().file();
     }
+    /**
+     * 轮转：把当前日志改名成 `.1`（覆盖上一份），新日志从空文件开始。
+     * 比原来的「读最后一半再写回去」便宜得多，而且最大占用固定为 2×上限。
+     */
+    private void rotateLogFile(File f) {
+        try {
+            if (logFileOut != null) {
+                try { logFileOut.close(); } catch (Throwable ignored) { }
+                logFileOut = null;
+            }
+            File old = new File(f.getParentFile(), LOG_FILE_NAME + ".1");
+            if (old.exists()) old.delete();
+            if (!f.renameTo(old)) {
+                // 改名失败（跨挂载点等）就退回截断
+                truncateLogFileHead(f);
+            }
+        } catch (Throwable t) {
+            android.util.Log.w("carbridge", "日志轮转失败: " + t);
+        }
+    }
+
     private void truncateLogFileHead(File f) {
         try {
             int keep = (int) (LOG_FILE_MAX / 2);

@@ -2162,7 +2162,11 @@ public final class HuClient {
         /**
      * 逐帧追踪：毫秒级时序 + 通道 + service id + 载荷字节。
      */
+    /** 逐帧追踪开关。默认关：跑一天光这一项就占日志的 88%（实测 37k 行里 33k 行是它）。 */
+    public static volatile boolean verboseTrace = false;
+
     private void trace(String dir, int slot, int service, byte[] body) {
+        if (!verboseTrace) return;
         long ms = Math.max(0L, System.currentTimeMillis() - startedAt);
         int n = body == null ? 0 : body.length;
         String hex;
