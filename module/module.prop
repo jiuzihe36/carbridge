@@ -1,0 +1,6 @@
+id=iphone_bt_identity
+name=iPhone 蓝牙身份（EIR / CoD / 名字）
+version=1.0.0
+versionCode=1
+author=Hermes for carbridge
+description=在射频层把本机伪装成 iPhone：EIR 写入 128 位 CarPlay UUID、CoD 与名字对齐、保持可被发现。纯运行时写入，不替换任何系统文件，卸载即恢复。

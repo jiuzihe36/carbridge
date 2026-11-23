@@ -36,3 +36,7 @@ tools/fakecar-jvm/out/
 # 车里那台 adb 已经信任的私钥：只在本机打包，绝不进仓库
 android/app/assets/adbkey
 android/app/assets/adbkey.pub
+
+# 模块构建产物
+module/.stage/
+build/*.zip
