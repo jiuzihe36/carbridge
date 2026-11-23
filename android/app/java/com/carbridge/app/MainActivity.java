@@ -347,6 +347,20 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                     com.carbridge.carplay.bt.BtIap2Server.realBluetoothAddress(this));
         } catch (Throwable tDiag) { com.carbridge.carplay.util.Diag.w("MainActivity", tDiag);
         }
+        // 蓝牙地址解析里可能要走一次 `su`（最长 1.5s）。先在后台预热一次，
+        // 免得 100ms 后的 toggleCarPlay() 在主线程上等它（现场表现是冷启动卡一下）。
+        com.carbridge.carplay.util.Bg.run("identity-warm", new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    com.carbridge.carplay.bt.BtIdentity.Resolved r =
+                            com.carbridge.carplay.bt.BtIdentity.resolve(MainActivity.this, false);
+                    if (r.ok()) com.carbridge.carplay.bt.BtIdentity.remember(MainActivity.this, r);
+                } catch (Throwable tDiag) {
+                    com.carbridge.carplay.util.Diag.w("MainActivity", tDiag);
+                }
+            }
+        });
         // ⚠️ 先把 CarPlay 鉴权/配对单独拉起来，而且必须早于 Car+：
         //    车机只会在蓝牙配对/回连的那一刻认「这是 iPhone」，
         //    这一步不依赖 Car+ 画面，也不应该等 CarLife 握手。

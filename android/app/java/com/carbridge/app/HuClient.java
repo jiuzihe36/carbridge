@@ -570,7 +570,7 @@ public final class HuClient {
     private static final java.util.concurrent.atomic.AtomicReference<HuClient> ACTIVE =
             new java.util.concurrent.atomic.AtomicReference<HuClient>();
 
-    public void start() {
+    public synchronized void start() {
         if (running) {
             return;
         }
@@ -588,7 +588,7 @@ public final class HuClient {
         }, "hu-session").start();
     }
 
-    public void stop() {
+    public synchronized void stop() {
         ACTIVE.compareAndSet(this, null);
         running = false;
         videoReading = false;
@@ -603,6 +603,12 @@ public final class HuClient {
     private void closeAll() {
         videoReading = false;
         audioReading = false;
+        // ⚠️ 语音通道的「有人在读」闩锁必须跟着换代一起清：它的 finally 只在
+        // gen == mediaGen 时才复位，而 closeAll 正好把 mediaGen++ 了 —— 不清这两格，
+        // 第一次重连之后 9241/9242 就再也没人读（缓冲填满 → 反压 Car+ 写线程），
+        // 而日志里一点异常都没有。
+        voiceReading[0] = false;
+        voiceReading[1] = false;
         mediaGen++;                    // 换代：旧的媒体读取线程据此自行退出、且不再动标志
         hbGen++;                       // 让这一轮的心跳线程自己退出
         startScheduled = false;        // 取消还没发出的 START
@@ -1593,6 +1599,9 @@ public final class HuClient {
                     // ⚠️ len==0 是 CarLife 的**空帧/心跳**，不是故障。
                     // 以前把它当致命错误 → closeAll() → 车机侧整个会话被我们拆掉，
                     // 重连后又遇到空帧 → 再断……现场表现就是「Car+ 总是自己断联」。
+                    // 空帧是「这条通道还活着」的证据，必须刷新活性时间戳，
+                    // 否则画面静止时（Car+ 只发空帧）会被外层观察窗判成停滞。
+                    lastRxAtMs = System.currentTimeMillis();
                     emptyFrames++;
                     if (emptyFrames == 1 || emptyFrames % 200 == 0) {
                         log("视频空帧（len=0）已跳过 " + emptyFrames + " 个（心跳/占位，不断会话）");
@@ -1606,6 +1615,13 @@ public final class HuClient {
                 }
                 byte[] payload = readN(s, len);
                 if (payload == null) {
+                    // 帧体读到一半就断了：线程静默退出会让「视频已死」这件事无人知晓
+                    // （CMD 心跳还会一直刷新活性，外层永不判停）→ 黑屏且不重连。
+                    if (running && gen == mediaGen) {
+                        log("视频帧体读取失败（半包/断开）→ 判链路故障并重建会话");
+                        markFault(Fault.EOF);
+                        closeAll();
+                    }
                     return;
                 }
                 lastRxAtMs = System.currentTimeMillis();   // 视频帧也算「链路在动」
@@ -1684,8 +1700,12 @@ public final class HuClient {
                 }
                 byte[] head = readN(s, 12);
                 if (head == null) {
-                    if (running) {
-                        log("音频通道关闭（gen=" + gen + "）");
+                    if (running && gen == mediaGen) {
+                        // 音频通道死了但视频还在跑时，现场是「车机永久无声、日志还显示推流中」。
+                        // 六条通道是一条会话，任何一条断都按整轮故障处理。
+                        log("音频通道关闭（gen=" + gen + "）→ 判链路故障并重建会话");
+                        markFault(Fault.EOF);
+                        closeAll();
                     }
                     return;
                 }
@@ -1698,6 +1718,11 @@ public final class HuClient {
                 }
                 byte[] payload = len == 0 ? new byte[0] : readN(s, len);
                 if (payload == null) {
+                    if (running && gen == mediaGen) {
+                        log("音频包体读取失败（半包/断开）→ 判链路故障并重建会话");
+                        markFault(Fault.EOF);
+                        closeAll();
+                    }
                     return;
                 }
                 if (service == HuProto.MEDIA_INIT) {

@@ -239,6 +239,7 @@ public final class Harness {
             @Override public void onLog(String msg) { synchronized (logs) { logs.add(msg); } }
             @Override public void onWifiConfig(Iap2SenderSession.WifiConfig c) { synchronized (logs) { logs.add("WIFI " + c); } }
             @Override public void onCarPlayEndpoint(Iap2SenderSession.Endpoint e) { synchronized (logs) { logs.add("ENDPOINT " + e); } }
+            @Override public void onIdentified() { synchronized (logs) { logs.add("IDENTIFIED"); } }
         };
         Iap2LinkEngine.Listener linkListener = new Iap2LinkEngine.Listener() {
             @Override public void onState(Iap2LinkEngine.State s) { }

@@ -62,6 +62,67 @@ public final class CarSideSetup {
     }
 
     /**
+     * 属性写不进去时的第二条路：把 helper 推到车机装上，让它替我们点那个被灰掉的 CarPlay 项。
+     *
+     * <p>helper（{@code com.carbridge.carforce}，12 KB，只申请蓝牙权限）会：
+     * {@code fetchUuidsWithSdp()} 把车机看到的手机 UUID 打出来 → 绑定
+     * {@code com.desaysv.vehicle.carplayapp/.CarplayService} → 反射调
+     * {@code connectWirelessCarplayItem(BluetoothDevice)}，相当于替用户点了车机上那一项。
+     *
+     * <p>推送用 {@code shell: cat > 路径} 而不是 adb 的 {@code sync:} 协议：后者要自己拼
+     * SEND/DATA/DONE 四字节包，前者只要往 stdin 写字节，出错面小得多。
+     */
+    private static Result installHelper(Context ctx, AdbClient client, Sh sh,
+                                        String target, String phoneMac, Log log) {
+        final String remote = "/data/local/tmp/carforce.apk";
+        try {
+            byte[] apk = readAssetBytes(ctx, "carforce.apk");
+            log.log("── helper 路线：推送 " + apk.length + " 字节 → " + remote);
+            client.shellWithInput("cat > " + remote, apk);
+            String ls = oneLine(sh.run("ls -l " + remote));
+            log.log("  落地：" + ls);
+
+            log.log("── 安装 helper（只装一次，之后一直有效）──");
+            String inst = sh.run("pm install -r -t " + remote + " 2>&1");
+            log.log("  " + oneLine(inst));
+            if (!inst.toLowerCase().contains("success")) {
+                return new Result(false, target, "helper 安装失败：" + oneLine(inst)
+                        + "（车机可能不允许 adb 装第三方应用）");
+            }
+
+            log.log("── 拉起 helper，让它调车机的 connectWirelessCarplayItem ──");
+            String start = sh.run("am start -n com.carbridge.carforce/.MainActivity"
+                    + " --es mac " + phoneMac + " --ez force true 2>&1");
+            log.log("  " + oneLine(start));
+            Thread.sleep(5000);
+
+            log.log("── helper 自己的日志（after-fetch 里有没有 2d8d2466）──");
+            String helperLog = sh.run("logcat -d -s carbridge-carforce -t 40 2>&1");
+            if (helperLog == null || helperLog.trim().length() == 0) {
+                log.log("  （helper 没打日志，可能没起来）");
+            } else {
+                for (String line : tail(helperLog, 12)) log.log("  " + line);
+            }
+            return new Result(true, target,
+                    "helper 已送达并拉起（" + target + "）：到车机上点 Apple CarPlay 里的这台手机；"
+                            + "若 helper 日志里 after-fetch 有 2d8d2466，说明车机 SDP 也读到了");
+        } catch (Throwable t) {
+            return new Result(false, target, "helper 路线失败：" + brief(t));
+        }
+    }
+
+    /** 读 assets 里的二进制（helper APK）。 */
+    private static byte[] readAssetBytes(Context ctx, String name) throws Exception {
+        InputStream in = ctx.getAssets().open(name);
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int n;
+        while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+        in.close();
+        return bos.toByteArray();
+    }
+
+    /**
      * 车机 shell 的执行器：能拿到 root 就用 {@code su -c} 包一层。
      *
      * <p>为什么要这层：{@code persist.sys.*} 这类属性在多数 Android 上只允许 system/root 写，
@@ -185,9 +246,8 @@ public final class CarSideSetup {
             log.log("  读回：" + readBack);
             boolean written = phoneMac.equalsIgnoreCase(readBack);
             if (!written) {
-                return new Result(false, target,
-                        "setprop 没生效（读回 " + readBack + "）——车机不接受 shell（或 su）写这条属性，"
-                                + "下一步只能走 carforce：直接绑 CarplayService 调 connectWirelessCarplayItem");
+                log.log("✗ setprop 没生效（读回 " + readBack + "）→ 转 helper 路线");
+                return installHelper(ctx, client, sh, target, phoneMac, log);
             }
 
             log.log("── 重启车机 CarPlay 应用，让它重读设备列表 ──");

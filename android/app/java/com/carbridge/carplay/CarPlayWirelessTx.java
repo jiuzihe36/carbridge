@@ -174,7 +174,7 @@ public final class CarPlayWirelessTx {
 
     // ================================================================== 生命周期
 
-    public void start() {
+    public synchronized void start() {
         if (state != State.IDLE && state != State.ERROR) return;
         setState(State.LISTENING_BT);
         enterStep(Step.BT_LISTEN);
@@ -274,7 +274,7 @@ public final class CarPlayWirelessTx {
         }
     }
 
-    public void stop() {
+    public synchronized void stop() {
         stopCallWatcher();
         setState(State.IDLE);
         main.removeCallbacks(wifiTimeout);

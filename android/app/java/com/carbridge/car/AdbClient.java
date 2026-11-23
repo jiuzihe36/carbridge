@@ -135,18 +135,22 @@ final class AdbClient {
                 throw new IOException("等待车机 shell 输出超时", e);
             }
             if (p.command == A_OKAY) {
-                if (remoteId < 0) remoteId = p.arg1;
+                // READY(local-id, remote-id) 两个 id 都相对**发送方**：adbd 发的
+                // OKAY 里 arg0 才是它自己的流 id，arg1 是被回显的我们的 id。
+                // 取错会表现为「输出照样收得到（我们不看 id 就读数据），但 stdin 全丢」——
+                // 对 shell 无害，对 cat > 文件是致命的（文件 0 字节）。
+                if (remoteId < 0) remoteId = p.arg0;
                 continue;
             }
             if (p.command == A_WRTE) {
-                if (remoteId < 0) remoteId = p.arg1;
+                if (remoteId < 0) remoteId = p.arg0;
                 output.write(p.data);
-                send(A_OKAY, localId, remoteId == -1 ? p.arg1 : remoteId, new byte[0]);
+                send(A_OKAY, localId, remoteId, new byte[0]);
                 continue;
             }
             if (p.command == A_CLSE) {
                 try {
-                    send(A_CLSE, localId, p.arg1, new byte[0]);
+                    send(A_CLSE, localId, p.arg0, new byte[0]);
                 } catch (Throwable ignored) {
                 }
                 return output.toString("UTF-8");
@@ -156,6 +160,88 @@ final class AdbClient {
             }
         }
         throw new IOException("等待车机 shell 结束超时");
+    }
+
+    /**
+     * 打开一个 shell 并把 stdin 喂进去（用于 {@code cat > 文件} 这种把 APK 推到车机的场景）。
+     *
+     * <p>为什么不用 adb 的 {@code sync:} 协议：那套要自己拼 SEND/DATA/DONE 四字节包，
+     * 而 {@code shell: cat > path} 只需要往 stdin 写字节，出错面小得多；12 KB 的 helper
+     * 走这条路实测稳定。
+     */
+    String shellWithInput(String command, byte[] input) throws Exception {
+        int localId = nextLocalId++;
+        byte[] payload = ("shell:" + command + "\u0000").getBytes(StandardCharsets.UTF_8);
+        send(A_OPEN, localId, 0, payload);
+        log.log("推送 " + input.length + " 字节 → " + command);
+
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        int remoteId = -1;
+        while (true) {
+            Packet p = readPacket();
+            if (p.command == A_OKAY) {
+                if (remoteId < 0) remoteId = p.arg0;
+                break;
+            }
+            if (p.command == A_CLSE) {
+                try {
+                    send(A_CLSE, localId, p.arg0, new byte[0]);
+                } catch (Throwable ignored) {
+                }
+                return output.toString("UTF-8");
+            }
+            if (p.command == A_WRTE) {
+                remoteId = p.arg0;
+                output.write(p.data);
+                send(A_OKAY, localId, remoteId, new byte[0]);
+            }
+        }
+
+        int off = 0;
+        while (off < input.length) {
+            int n = Math.min(MAX_DATA, input.length - off);
+            byte[] chunk = new byte[n];
+            System.arraycopy(input, off, chunk, 0, n);
+            send(A_WRTE, localId, remoteId, chunk);
+            off += n;
+            // 每发一块等一次 OKAY；中途若有输出先收着
+            while (true) {
+                Packet p = readPacket();
+                if (p.command == A_OKAY) break;
+                if (p.command == A_WRTE) {
+                    output.write(p.data);
+                    send(A_OKAY, localId, remoteId, new byte[0]);
+                    continue;
+                }
+                if (p.command == A_CLSE) {
+                    try {
+                        send(A_CLSE, localId, p.arg0, new byte[0]);
+                    } catch (Throwable ignored) {
+                    }
+                    return output.toString("UTF-8");
+                }
+            }
+        }
+
+        // 关 stdin：命令（cat）看到 EOF 才会退出
+        send(A_CLSE, localId, remoteId, new byte[0]);
+        long deadline = System.currentTimeMillis() + 60000L;
+        while (System.currentTimeMillis() < deadline) {
+            Packet p = readPacket();
+            if (p.command == A_WRTE) {
+                output.write(p.data);
+                send(A_OKAY, localId, remoteId, new byte[0]);
+                continue;
+            }
+            if (p.command == A_CLSE) {
+                try {
+                    send(A_CLSE, localId, p.arg0, new byte[0]);
+                } catch (Throwable ignored) {
+                }
+                return output.toString("UTF-8");
+            }
+        }
+        throw new IOException("等待推送结束超时");
     }
 
     void close() {

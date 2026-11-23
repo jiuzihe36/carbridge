@@ -346,7 +346,7 @@ public final class CarPlaySdpBeacon {
      * 所以自检只回答三件事：蓝牙开了没、信标挂了没、挂的这 4 条 UUID 是不是齐的。
      * SDP 数据库有 2–5 分钟同步延迟，所以还附上「信标已就绪多久」，帮助判断是否要再等。
      */
-    public static String diagnose(BluetoothAdapter adapter) {
+    public static synchronized String diagnose(BluetoothAdapter adapter) {
         if (adapter == null || !adapter.isEnabled()) {
             return "✗ 蓝牙未开启。请先打开蓝牙，再重新打开本 App。";
         }
@@ -387,7 +387,7 @@ public final class CarPlaySdpBeacon {
      * 界面一行状态（「本机身份」分组用）：只回答挂没挂上、挂了几条。
      * 详细结论仍走 {@link #diagnose(BluetoothAdapter)}。
      */
-    public static String statusLine() {
+    public static synchronized String statusLine() {
         if (!started) return "未注册";
         String base = "已注册 " + REGISTERED.size() + " 条";
         if (!REGISTERED.contains(APPLE_DEVICE_UUID)) base += " · 缺 CarPlay 标记";
@@ -396,7 +396,7 @@ public final class CarPlaySdpBeacon {
     }
 
     /** 车机认 iPhone 的关键记录在不在（界面据此标红）。 */
-    public static boolean carplayMarkPresent() {
+    public static synchronized boolean carplayMarkPresent() {
         return started && REGISTERED.contains(APPLE_DEVICE_UUID) && acceptLoopsAlive();
     }
 

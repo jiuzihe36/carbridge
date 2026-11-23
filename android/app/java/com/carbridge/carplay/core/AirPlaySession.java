@@ -159,6 +159,8 @@ public final class AirPlaySession {
 
     /** 视频通道已断（Broken pipe 等），置位后停止推流与刷日志。 */
     private volatile boolean videoBroken;
+    /** 因单帧异常被丢掉的帧数（不算通道故障）。 */
+    private volatile int droppedVideoFrames;
 
     /** 是否已配对。配对后控制通道走 ChaCha20-Poly1305（带 tag、AAD=长度头），`SETUP /setup` 省略 et。 */
     private volatile boolean paired;
@@ -188,7 +190,7 @@ public final class AirPlaySession {
     private final Object controlLock = new Object();
     private long streamConnectionId;
     private long streamStartNanos;
-    private boolean running;
+    private volatile boolean running;
     private int audioPort = -1;
     /** 本次会话选中的音频档位（诊断用）。 */
     private long audioFormatBit = 0x800L;
@@ -281,9 +283,9 @@ public final class AirPlaySession {
 
     // ================================================================== 生命周期
 
-    public void start() {
-        CURRENT = this;
+    public synchronized void start() {
         if (running) return;
+        CURRENT = this;
         running = true;
         new Thread(new Runnable() {
             @Override
@@ -1233,6 +1235,7 @@ public final class AirPlaySession {
             public void run() {
                 int n = 0;
                 int failures = 0;
+                int loopErrors = 0;
                 while (running) {
                     try {
                         Thread.sleep(1000);
@@ -1273,8 +1276,19 @@ public final class AirPlaySession {
                     } catch (InterruptedException ie) {
                         return;
                     } catch (Exception e) {
-                        if (running) log("心跳失败: " + e);
-                        return;
+                        // 这里抓的是「非 /feedback」的异常（视频 keepalive 写已关通道、
+                        // DNS 解析失败、UDP 发送失败…）。以前直接 return → 心跳线程死掉但
+                        // running 仍是 true：车机等不到心跳超时断流，UI 却一直显示「推流中」。
+                        loopErrors++;
+                        if (loopErrors <= 3 || loopErrors % 60 == 0) {
+                            log("心跳循环异常（第 " + loopErrors + " 次，继续跑）: " + e);
+                        }
+                        if (loopErrors >= 600) {          // 约 10 分钟都在错：判死
+                            log("心跳连续异常 " + loopErrors + " 次，判定会话不可用");
+                            if (running) setState(State.ERROR);
+                            return;
+                        }
+                        continue;
                     }
                 }
             }
@@ -1339,6 +1353,15 @@ public final class AirPlaySession {
             }
         } catch (Exception e) {
             if (videoBroken) return;
+            if (!(e instanceof java.io.IOException)) {
+                // 加密/封装/数组越界这类是「这一帧的问题」，不是通道死了。
+                // 以前一律置 videoBroken，一帧异常就永久停推，只能重连才恢复。
+                droppedVideoFrames++;
+                if (droppedVideoFrames <= 3 || droppedVideoFrames % 100 == 0) {
+                    log("丢弃异常视频帧（第 " + droppedVideoFrames + " 帧）: " + e);
+                }
+                return;
+            }
             videoBroken = true;
             // 通道已断：关掉避免每帧重复报 Broken pipe（实测每秒刷屏）
             log("视频通道断开，停止推流: " + e);
@@ -1651,7 +1674,11 @@ public final class AirPlaySession {
 
     private long ntpTimestamp() {
         long micros = (System.nanoTime() - streamStartNanos) / 1000;
-        return (micros << 32) / 1000000L;
+        // ⚠️ 不能写 (micros << 32) / 1e6：micros 超过 2^31（≈35.8 分钟）左移就溢出成负数，
+        // 视频 RTP 时间戳变负、车机时钟错乱。拆成「秒 + 小数」两段，全部落在 64 位内。
+        long secs = micros / 1000000L;
+        long frac = ((micros % 1000000L) << 32) / 1000000L;
+        return (secs << 32) | (frac & 0xFFFFFFFFL);
     }
 
     /** 视频转发耗时统计（每 5 秒一条）：区分「app 转发慢」还是「上游/网络慢」。 */
@@ -1706,13 +1733,19 @@ public final class AirPlaySession {
     private OutputStream videoOut;
 
     private void sendVideoPacket(byte[] packet) throws IOException {
-        OutputStream out = videoOut;
-        if (out == null) {
-            out = videoChannel.getOutputStream();
-            videoOut = out;
+        // ⚠️ 必须自己拿锁：视频线程在 synchronized(videoSendLock) 里调它，但
+        // **心跳线程是裸调的**（每秒一次 keepalive）。两条线程同时写同一个
+        // OutputStream 时，大帧分多次 write 会交错，车机收到坏帧；
+        // 锁可重入，已经在锁里的调用方不受影响。
+        synchronized (videoSendLock) {
+            OutputStream out = videoOut;
+            if (out == null) {
+                out = videoChannel.getOutputStream();
+                videoOut = out;
+            }
+            out.write(packet);
+            out.flush();
         }
-        out.write(packet);
-        out.flush();
     }
 
     // ================================================================== 事件通道
@@ -2316,8 +2349,11 @@ public final class AirPlaySession {
         for (int i = 0; i < 8; i++) b[off + i] = (byte) (v >>> (8 * (7 - i)));
     }
 
-    private void setState(State s) {
+    private synchronized void setState(State s) {
         if (state == s) return;
+        // CLOSED 是终态：会话线程被 socket close 唤醒后走 catch 会把状态写成 ERROR，
+        // 于是「已关闭」被复活成「错误」，依赖 state 做判断的地方全都错位。
+        if (state == State.CLOSED) return;
         state = s;
         listener.onState(s);
     }
