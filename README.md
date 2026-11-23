@@ -75,6 +75,20 @@ tools/fakecar/         便携假车机，用于协议联调
 docs/ARCHITECTURE.md   模块划分与会话流程
 ```
 
+## 开发与验证
+
+改动前先读 [`AGENT.md`](AGENT.md)（证据分级、禁止按车型分支、调试与验证规则）；
+当前哪些已确认、哪些还是 `OPEN` 见 [`docs/STATUS.md`](docs/STATUS.md)，架构见
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)，持久决策见 `docs/decisions/`。
+
+```bash
+tools/verify.sh            # 架构守卫 + 纯逻辑单测（默认）
+BUILD=1 tools/verify.sh    # 追加 APK 构建
+SMOKE=1 tools/verify.sh    # 追加装机 + 假车机全流程（需手机 + 平板）
+```
+
+`verify.sh` 输出 `PASS / SKIP / FAIL` 三态：**SKIP 表示本次未验证，不算通过**。
+
 ## 限制
 
 - 仅支持无线 CarPlay，不支持 USB 有线。
