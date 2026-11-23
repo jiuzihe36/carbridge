@@ -175,7 +175,13 @@ public final class HuClient {
     private static final int SETTLE_STEP_MS = 1500;
     /** 放宽上限 —— 与历史上的 6 秒持平，保证最坏情况不劣于旧行为。 */
     private static final int SETTLE_MAX_MS = 6000;
-    /** 冷启动首轮的等待：ocar 首次 CLEAR_TASK 后要 8-10 秒才把 6 个端口开齐。 */
+    /**
+     * 冷启动首轮的等待：ocar 首次 CLEAR_TASK 后要 8-10 秒才把 6 个端口开齐。
+     *
+     * <p>2026-11-23 实测复核：降到 5500ms 连跑 3 轮，**三次都「等不到端口」**，
+     * 说明 8 秒不是拍脑袋，是 Car+ 冷启动的固有成本。想再压低只能让它别每次冷启动
+     * （后台预热），而不是继续砍这个值。
+     */
     private static final int COLD_SETTLE_MS = 8000;
     /** 本次 HuClient 实例的第一轮（冷启动）。 */
     private volatile boolean coldStart = true;
@@ -997,9 +1003,18 @@ public final class HuClient {
                     // 之后的重试 Car+ 早已就绪，直接连。手机若回 @20，那是组件进程里
                     // mInited 为 true 的短路回显，交给 0x1800C 帧率归一化纠正，
                     // 不需要靠重启进程来重置。
-                    int settle = coldStart ? COLD_SETTLE_MS : settleMs;
+                    // 冷启动那 8 秒原本是「盲等」：读不到 /proc 时唯一能做的猜测。
+                    // 现在能读到端口表了（直接读或 root 兜底），就按**六个端口是否开齐**判：
+                    // 齐了只等 SETTLE_MIN_MS（4500ms 的下限有实测依据：1500ms 会让 ocar 端口全灭），
+                    // 没齐才退回冷启动的 8 秒。
+                    boolean allUp = allPortsListening(set);
+                    int settle = allUp ? SETTLE_MIN_MS : (coldStart ? COLD_SETTLE_MS : settleMs);
                     long sinceLaunch = lastLaunchAtMs > 0
                             ? Math.max(0L, System.currentTimeMillis() - lastLaunchAtMs) : Long.MAX_VALUE;
+                    if (allUp) {
+                        log("六个端口已开齐（距拉起 " + (sinceLaunch == Long.MAX_VALUE ? "?" : sinceLaunch + "ms")
+                                + "）→ 按最短等待 " + SETTLE_MIN_MS + "ms 连");
+                    }
                     long w = sinceLaunch < settle ? settle - sinceLaunch : 0;
                     if (w > 0) {
                         log("端口 " + set[0] + " 已打开，距上次拉起还差 " + w + "ms，等够再连");
@@ -1061,41 +1076,142 @@ public final class HuClient {
         return isListening(port);
     }
 
-    private static boolean isListening(int port) {
+    private boolean isListening(int port) {
         return scanProcNet("/proc/net/tcp", port) || scanProcNet("/proc/net/tcp6", port);
+    }
+
+    /** 一组端口（6 条通道）是不是全部在 LISTEN —— 端口齐了才算 Car+ 的服务备好。 */
+    private boolean allPortsListening(int[] set) {
+        for (int p : set) {
+            if (!isListening(p)) return false;
+        }
+        return true;
+    }
+
+    // ── /proc/net/tcp 读取：直接读不到时用 root 兜底 ──────────────────────
+    //
+    // Android 10+ 的 SELinux 不给普通应用读 /proc/net/tcp。以前读不到就退化成
+    // 「盲等 8 秒再直连」—— 而 Car+ 冷启动其实 5~10 秒才把 6 个端口开齐，
+    // 这个盲等是首帧 9 秒里最大的一块。有 root 时 `su -c cat` 能读到，
+    // 于是可以改成「等端口齐了 + 4.5 秒下限」，而不是死等 8 秒。
+    private static final long PROC_NET_TTL_MS = 120;   // 表很小，但对 su 要省着点 fork
+    private static volatile long procNetCacheAt;
+    private static volatile String procNetTcpCache;
+    private static volatile String procNetTcp6Cache;
+
+    /** 直接读 + root 兜底；结果按 TTL 缓存（每次轮询都会调）。 */
+    private String readProcNet(String path) {
+        long now = System.currentTimeMillis();
+        boolean tcp6 = path.endsWith("6");
+        if (now - procNetCacheAt < PROC_NET_TTL_MS) {
+            String c = tcp6 ? procNetTcp6Cache : procNetTcpCache;
+            if (c != null) return c;
+        }
+        String content = readFileQuietly(path);
+        if (content == null) content = readViaRoot(path);
+        if (tcp6) procNetTcp6Cache = content; else procNetTcpCache = content;
+        procNetCacheAt = now;
+        return content;
+    }
+
+    private String readFileQuietly(String path) {
+        java.io.FileInputStream in = null;
+        try {
+            in = new java.io.FileInputStream(path);
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream(4096);
+            byte[] buf = new byte[4096];
+            int n;
+            while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+            return bos.toString("UTF-8");
+        } catch (Throwable t) {
+            return null;
+        } finally {
+            if (in != null) try { in.close(); } catch (Throwable ignored) { }
+        }
+    }
+
+    /** `su -c cat /proc/net/tcp`；拿不到 root 就返回 null（只尝试一次，失败即熔断）。 */
+    private static volatile int rootCatState;   // 0=未知 1=可用 -1=不可用
+    private String readViaRoot(String path) {
+        if (rootCatState < 0) return null;
+        Process p = null;
+        try {
+            // 必须用绝对路径：应用进程的 PATH 不一定含 /system/bin，
+            // 直接 exec("su") 会报 error=2 No such file or directory（实测 ColorOS 17）。
+            String su = null;
+            for (String cand : new String[]{"/system/bin/su", "/debug_ramdisk/su",
+                    "/data/adb/ksu/bin/su", "/sbin/su", "/system/xbin/su"}) {
+                if (new java.io.File(cand).exists()) { su = cand; break; }
+            }
+            if (su == null) su = "su";
+            p = Runtime.getRuntime().exec(new String[]{su, "-c", "cat " + path});
+            final Process fp = p;
+            final java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream(4096);
+            Thread reader = new Thread(new Runnable() {
+                @Override public void run() {
+                    java.io.InputStream in = fp.getInputStream();
+                    byte[] buf = new byte[4096];
+                    int n;
+                    try {
+                        while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+                    } catch (Throwable ignored) { }
+                }
+            }, "proc-net-root");
+            reader.setDaemon(true);
+            reader.start();
+            boolean done = p.waitFor(1500, java.util.concurrent.TimeUnit.MILLISECONDS);
+            if (!done) {
+                try { p.destroy(); } catch (Throwable ignored) { }
+                if (rootCatState == 0) log("root 读 /proc/net/tcp 超时 → 本机退化为盲等端口");
+                rootCatState = -1;
+                return null;
+            }
+            reader.join(500);
+            String out = bos.toString("UTF-8");
+            if (out == null || out.indexOf(':') < 0) {   // 空的/报错输出
+                if (rootCatState == 0) {
+                    log("root 读 /proc/net/tcp 失败（su 被拒或输出为空）→ 本机退化为盲等端口");
+                }
+                rootCatState = -1;
+                return null;
+            }
+            if (rootCatState == 0) {
+                log("已通过 root 读取 /proc/net/tcp → 可以用「六个端口齐」代替盲等");
+            }
+            rootCatState = 1;
+            return out;
+        } catch (Throwable t) {
+            if (rootCatState == 0) {
+                log("root 读 /proc/net/tcp 不可用（" + t + "）→ 退化为盲等端口；"
+                        + "要在 SukiSU/KernelSU 里给本应用授权 root 才能用上端口观测");
+            }
+            rootCatState = -1;
+            return null;
+        } finally {
+            if (p != null) try { p.destroy(); } catch (Throwable ignored) { }
+        }
     }
 
     /** /proc/net/tcp 是否可读（只用来看是否需要退化到「直连」模式）。0=未知 1=可读 -1=不可读 */
     private static volatile int procNetState;
 
-    private static boolean procNetReadable() {
+    private boolean procNetReadable() {
         int st = procNetState;
         if (st == 0) {
-            BufferedReader r = null;
-            try {
-                r = new BufferedReader(new InputStreamReader(
-                        new FileInputStream("/proc/net/tcp"), "UTF-8"));
-                st = r.readLine() != null ? 1 : -1;
-            } catch (Throwable t) {
-                st = -1;
-            } finally {
-                if (r != null) {
-                    try {
-                        r.close();
-                    } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("HuClient", t);
-                    }
-                }
-            }
+            String c = readProcNet("/proc/net/tcp");
+            st = (c != null && c.length() > 0) ? 1 : -1;
             procNetState = st;
         }
         return st > 0;
     }
 
     /** 扫一行一个 socket 的表：{@code sl local_address rem_address st ...}。 */
-    private static boolean scanProcNet(String path, int port) {
+    private boolean scanProcNet(String path, int port) {
+        String content = readProcNet(path);
+        if (content == null) return false;
         BufferedReader r = null;
         try {
-            r = new BufferedReader(new InputStreamReader(new FileInputStream(path), "UTF-8"));
+            r = new BufferedReader(new java.io.StringReader(content));
             String needle = String.format(java.util.Locale.ROOT, ":%04X", port);
             String line;
             boolean header = true;
