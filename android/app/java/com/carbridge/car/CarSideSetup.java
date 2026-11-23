@@ -62,6 +62,65 @@ public final class CarSideSetup {
     }
 
     /**
+     * 车机 shell 的执行器：能拿到 root 就用 {@code su -c} 包一层。
+     *
+     * <p>为什么要这层：{@code persist.sys.*} 这类属性在多数 Android 上只允许 system/root 写，
+     * 而 adb shell 是 shell 用户 —— 直接 {@code setprop} 在不少机型会回
+     * {@code failed to set property}。车机是 Android 9 的开发版（userdebug/eng 很常见），
+     * 先试一次 {@code su -c id}，成不成都写进日志，用户和我都能看到走的是哪条路。
+     */
+    private static final class Sh {
+        private final AdbClient client;
+        private final Log log;
+        private boolean root;
+        private boolean probed;
+
+        Sh(AdbClient client, Log log) {
+            this.client = client;
+            this.log = log;
+        }
+
+        private void probe() {
+            if (probed) return;
+            probed = true;
+            try {
+                String id = client.shell("id").trim();
+                if (id.contains("uid=0")) {
+                    root = true;
+                    log.log("  shell 已经是 root（" + oneLine(id) + "）");
+                    return;
+                }
+                String suId = client.shell("su -c id 2>&1").trim();
+                if (suId.contains("uid=0")) {
+                    root = true;
+                    log.log("  车机有 su：后续命令用 su -c 执行");
+                } else {
+                    log.log("  车机没有 su（su -c id → " + oneLine(suId) + "）");
+                }
+            } catch (Throwable t) {
+                log.log("  root 探测失败：" + t);
+            }
+        }
+
+        /** 执行命令，返回合并输出（用于抓日志这类要读结果的）。 */
+        String run(String cmd) throws Exception {
+            probe();
+            if (!root) return client.shell(cmd);
+            return client.shell("su -c \"" + cmd.replace("\"", "\\\"") + "\" 2>&1");
+        }
+
+        /** 执行命令并返回一行可读的日志文本（用于 setprop / am 这类只看成败的）。 */
+        String runOn(String cmd) {
+            try {
+                String out = run(cmd).trim();
+                return cmd + (out.length() == 0 ? "  → 已执行" : "  → " + oneLine(out));
+            } catch (Throwable t) {
+                return cmd + "  → 失败：" + t;
+            }
+        }
+    }
+
+    /**
      * 跑一次完整流程（阻塞，调用方必须放在后台线程）。
      *
      * @param phoneMac 本机蓝牙 MAC —— 车机就是拿它跟配对列表对名字
@@ -111,28 +170,34 @@ public final class CarSideSetup {
             log.log("── 车机信息 ──");
             log.log("  型号：" + oneLine(client.shell("getprop ro.product.model")));
             log.log("  固件：" + oneLine(client.shell("getprop ro.build.display.id")));
+            String buildType = oneLine(client.shell("getprop ro.build.type"));
+            log.log("  构建类型：" + buildType + "（userdebug/eng 才有机会 su）");
             log.log("  当前 " + PROP + " = "
                     + oneLine(client.shell("getprop " + PROP)));
 
+            // adb shell 是 shell 用户；persist.sys.* 在多数机型只允许 system/root 写。
+            // 先探测能不能拿到 root，拿得到就用 su 包一层——车机是 Android 9 的开发版，
+            // 这一步成的概率不低，比"写不进去就报错"有用。
+            Sh sh = new Sh(client, log);
             log.log("── 写入后门 ──");
-            log.log("  setprop " + PROP + " " + phoneMac);
-            client.shell("setprop " + PROP + " " + phoneMac);
+            log.log("  " + sh.runOn("setprop " + PROP + " " + phoneMac));
             String readBack = oneLine(client.shell("getprop " + PROP));
             log.log("  读回：" + readBack);
             boolean written = phoneMac.equalsIgnoreCase(readBack);
             if (!written) {
                 return new Result(false, target,
-                        "setprop 没生效（读回 " + readBack + "）——车机可能只允许 shell 之外的 uid 写");
+                        "setprop 没生效（读回 " + readBack + "）——车机不接受 shell（或 su）写这条属性，"
+                                + "下一步只能走 carforce：直接绑 CarplayService 调 connectWirelessCarplayItem");
             }
 
             log.log("── 重启车机 CarPlay 应用，让它重读设备列表 ──");
-            client.shell("am force-stop " + CARPLAY_PKG);
+            sh.runOn("am force-stop " + CARPLAY_PKG);
             Thread.sleep(800);
-            client.shell("am start --user 0 -n " + CARPLAY_PKG + "/.MainActivity");
+            sh.runOn("am start --user 0 -n " + CARPLAY_PKG + "/.MainActivity");
             log.log("  已重启 " + CARPLAY_PKG);
 
             log.log("── 车机最近的 CarPlay 判定日志 ──");
-            String logs = client.shell(
+            String logs = sh.run(
                     "logcat -d -v time -t 200 | grep -iE 'isSupportCarplay|connectWirelessCarplay|connectBT|New Iphone'");
             if (logs == null || logs.trim().length() == 0) {
                 log.log("  （没有匹配到判定日志）");
