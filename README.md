@@ -82,12 +82,13 @@ docs/ARCHITECTURE.md   模块划分与会话流程
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)，持久决策见 `docs/decisions/`。
 
 ```bash
-tools/verify.sh            # 架构守卫 + 纯逻辑单测（默认）
+tools/verify.sh            # 协议 docset + 架构守卫 + 纯逻辑单测（默认）
 BUILD=1 tools/verify.sh    # 追加 APK 构建
 SMOKE=1 tools/verify.sh    # 追加装机 + 假车机全流程（需手机 + 平板）
 ```
 
 `verify.sh` 输出 `PASS / SKIP / FAIL` 三态：**SKIP 表示本次未验证，不算通过**。
+协议证据状态见 `docs/STATUS.md`，逐条协议项在 `docs/protocol/`（结构由 `docs/protocol/verify.py` 校验）。
 
 ## 限制
 

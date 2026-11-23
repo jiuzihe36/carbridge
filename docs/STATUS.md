@@ -32,13 +32,13 @@
 
 ## 开放项（OPEN）
 
-| 事项 | 为什么 OPEN | 什么能关闭它 |
+| 事项 | 为什么 OPEN | 什么能关闭它 | 跟踪 |
 |---|---|---|
-| USB 有线 CarPlay | 未实现，只做无线 | 有线链路抓包 + 实车验证 |
-| 要求严格 MFi 签名的车机 | 未遇到实车样本 | 一台该类车机的完整会话日志（含鉴权失败点） |
-| 多协议：HiCar / ICCOA / CarWith | 未实现，仅保留扩展方向 | 对应协议证据链 + 独立模块接入 |
-| 通话音频在更多车机上的表现 | 平台限制 + 车机差异 | 逐台实车记录（`PASS` / `PARTIAL` + 第一断点） |
-| 车机旧会话残留导致的「连上但不出画面」 | 有现象、缺系统性证据 | 复现步骤 + 车机侧日志 + 断开/重连代际隔离验证 |
+| USB 有线 CarPlay | 未实现，只做无线 | 有线链路抓包 + 实车验证 | [#1](https://github.com/jiuzihe36/carbridge/issues/1) |
+| 要求严格 MFi 签名的车机 | 未遇到实车样本 | 一台该类车机的完整会话日志（含鉴权失败点） | [#2](https://github.com/jiuzihe36/carbridge/issues/2) |
+| 多协议：HiCar / ICCOA / CarWith | 未实现，仅保留扩展方向 | 对应协议证据链 + 独立模块接入 | [#3](https://github.com/jiuzihe36/carbridge/issues/3) |
+| 通话音频在更多车机上的表现 | 平台限制 + 车机差异 | 逐台实车记录（`PASS` / `PARTIAL` + 第一断点） | [#4](https://github.com/jiuzihe36/carbridge/issues/4) |
+| 车机旧会话残留导致的「连上但不出画面」 | 有现象、缺系统性证据 | 复现步骤 + 车机侧日志 + 断开/重连代际隔离验证 | [#5](https://github.com/jiuzihe36/carbridge/issues/5) |
 
 ## 已知平台约束（不是 bug）
 

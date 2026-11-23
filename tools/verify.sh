@@ -52,7 +52,14 @@ printf '\n=== carbridge 验证 ===\n'
 printf 'JDK: %s\n\n' "${JAVA_HOME:-（未找到，尝试系统 PATH 的 javac）}"
 
 # ---- 1. 架构守卫（必跑） -----------------------------------------------------
-printf '[1/4] 架构守卫\n'
+printf '[1/5] 协议 docset 结构\n'
+if [ ! -x docs/protocol/verify.py ]; then
+    record FAIL "协议 docset" "docs/protocol/verify.py 缺失或不可执行"
+else
+    run_step "协议 docset" docs/protocol/verify.py
+fi
+
+printf '\n[2/5] 架构守卫\n'
 if [ ! -x tools/check-arch.sh ]; then
     record FAIL "架构守卫" "tools/check-arch.sh 缺失或不可执行"
 else
@@ -60,7 +67,7 @@ else
 fi
 
 # ---- 2. 纯逻辑单测（必跑） ---------------------------------------------------
-printf '\n[2/4] 纯逻辑单测\n'
+printf '\n[3/5] 纯逻辑单测\n'
 if [ ! -x tools/carbridge-tests/run.sh ]; then
     record FAIL "纯逻辑单测" "tools/carbridge-tests/run.sh 缺失或不可执行"
 else
@@ -76,7 +83,7 @@ else
 fi
 
 # ---- 3. 构建（可选：BUILD=1） -------------------------------------------------
-printf '\n[3/4] 构建\n'
+printf '\n[4/5] 构建\n'
 if [ "${BUILD:-0}" != "1" ]; then
     record SKIP "构建" "未开启（BUILD=1 开启）"
 else
@@ -85,7 +92,7 @@ else
 fi
 
 # ---- 4. 冒烟（可选：SMOKE=1，需要手机 + 平板） -------------------------------
-printf '\n[4/4] 冒烟（真机全流程）\n'
+printf '\n[5/5] 冒烟（真机全流程）\n'
 if [ "${SMOKE:-0}" != "1" ]; then
     record SKIP "冒烟" "未开启（SMOKE=1 开启，需手机+平板）"
 else

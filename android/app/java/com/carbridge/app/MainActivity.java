@@ -109,6 +109,10 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
     /** 整体进度条（合并两组后共 15 步）。 */
     private ProgressBar stepsProgress;
     private TextView stepsProgressText;
+    /** 一屏结论：首个断点（判定在 StepDiagnosis，有单测）。 */
+    private TextView stepDiagnosisView;
+    private String diagKey = "";
+    private long diagChangedAt = 0L;
     /** 合并后的步骤行数（CarLife + 分隔标题 + CarPlay）。 */
     private static final int CARLIFE_STEPS = HuClient.Step.values().length;
     private static final int CARPLAY_STEPS = CarPlayWirelessTx.Step.values().length;
@@ -194,6 +198,7 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         stepsContainer = (LinearLayout) findViewById(R.id.steps_container);
         stepsProgress = (ProgressBar) findViewById(R.id.steps_progress);
         stepsProgressText = (TextView) findViewById(R.id.steps_progress_text);
+        stepDiagnosisView = (TextView) findViewById(R.id.step_diagnosis);
         elapsedView = (TextView) findViewById(R.id.elapsed);
         idBtName = (TextView) findViewById(R.id.id_bt_name);
         idBtMac = (TextView) findViewById(R.id.id_bt_mac);
@@ -2481,6 +2486,7 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
             }
         }
         updateProgress(doneCount);
+        updateDiagnosis();
         updateDiagram();
     }
     /**
@@ -2518,6 +2524,51 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
             default:
                 return new RowState("○", getColorCompat(R.color.state_idle),
                         getString(R.string.step_pending), false);
+        }
+    }
+
+    /**
+     * 一屏结论：现在第一个卡住的阶段是哪一步、卡了多久、下一步该看哪里。
+     *
+     * <p>判定全在 {@link StepDiagnosis}（纯逻辑 + 单测），这里只做「取当前状态 → 上色」。
+     * 步骤变化时重置计时；停住超过阈值才说「无进展」，避免正常推进时也报卡住。
+     */
+    private void updateDiagnosis() {
+        if (stepDiagnosisView == null) return;
+        String key = currentStep + "|" + failedStep + "|" + carPlayStep + "|" + carPlayFailedStep;
+        long now = System.currentTimeMillis();
+        if (!key.equals(diagKey)) {
+            diagKey = key;
+            diagChangedAt = now;
+        }
+        long stalled = diagChangedAt == 0L ? 0L : Math.max(0L, now - diagChangedAt);
+
+        String[] cl = new String[HuClient.Step.values().length];
+        for (HuClient.Step st : HuClient.Step.values()) cl[st.ordinal()] = st.label;
+        String[] cp = new String[CarPlayWirelessTx.Step.values().length];
+        for (CarPlayWirelessTx.Step st : CarPlayWirelessTx.Step.values()) cp[st.ordinal()] = st.label;
+
+        StepDiagnosis.Result r = StepDiagnosis.of(cl,
+                currentStep == null ? null : currentStep.ordinal(),
+                failedStep == null ? null : failedStep.ordinal(),
+                cp,
+                carPlayStep == null ? null : carPlayStep.ordinal(),
+                carPlayFailedStep == null ? null : carPlayFailedStep.ordinal(),
+                stalled);
+        stepDiagnosisView.setText(r.text());
+        switch (r.level) {
+            case FAILED:
+                stepDiagnosisView.setTextColor(getColorCompat(R.color.state_err));
+                break;
+            case RUNNING:
+                stepDiagnosisView.setTextColor(getColorCompat(R.color.state_work));
+                break;
+            case DONE:
+                stepDiagnosisView.setTextColor(getColorCompat(R.color.state_ok));
+                break;
+            default:
+                stepDiagnosisView.setTextColor(getColorCompat(R.color.text_muted));
+                break;
         }
     }
 

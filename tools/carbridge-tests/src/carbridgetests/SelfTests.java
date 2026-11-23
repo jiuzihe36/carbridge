@@ -1,5 +1,6 @@
 package carbridgetests;
 
+import com.carbridge.app.StepDiagnosis;
 import com.carbridge.carplay.core.AdaptiveResolution;
 import com.carbridge.carplay.core.DisplayGeometry;
 import com.carbridge.carplay.iap2.Iap2Csm;
@@ -36,6 +37,7 @@ public final class SelfTests {
         statusView();
         metricsText();
         macText();
+        stepDiagnosis();
 
         wifiConfig();
         cryptoVectors();
@@ -727,6 +729,54 @@ public final class SelfTests {
     }
 
     // ---------------------------------------------------------------- 工具
+
+    // ---------------------------------------------------------------- 首个断点
+
+    private static void stepDiagnosis() {
+        section("StepDiagnosis");
+        String[] cl = {"等待 Car+ 打开通道", "连接 6 条通道", "开始推流"};
+        String[] cp = {"蓝牙监听", "iAP2 链路握手", "加入车机热点", "推流中"};
+
+        StepDiagnosis.Result idle = StepDiagnosis.of(cl, null, null, cp, null, null, 0);
+        check(idle.level == StepDiagnosis.Level.IDLE, "没开始 → IDLE");
+        check(idle.text().contains("未开始"), "没开始有文案");
+
+        StepDiagnosis.Result run = StepDiagnosis.of(cl, 0, null, cp, 1, null, 2000);
+        check(run.level == StepDiagnosis.Level.RUNNING, "进行中 → RUNNING");
+        check(run.headline.contains("CarPlay") && run.headline.contains("第 2/4 步"), "取 CarPlay 当前步");
+        check(run.headline.contains("iAP2 链路握手"), "带步骤名");
+
+        StepDiagnosis.Result stall = StepDiagnosis.of(cl, null, null, cp, 2, null,
+                StepDiagnosis.STALL_MS + 500);
+        check(stall.text().contains("无进展"), "超过阈值报无进展");
+        check(stall.text().contains("热点"), "卡在热点给对应提示");
+        check(stall.text().contains("8.5s"), "带停住时长");
+
+        // 两条链都有失败：CarPlay 优先
+        StepDiagnosis.Result fail = StepDiagnosis.of(cl, 5, 1, cp, 1, 2, 0);
+        check(fail.level == StepDiagnosis.Level.FAILED, "失败优先于进行中");
+        check(fail.headline.contains("CarPlay") && fail.headline.contains("第 3/4 步"),
+                "CarPlay 失败优先于 CarLife");
+        check(fail.text().contains("0x5703"), "失败文案带该阶段提示");
+
+        // 只有 CarLife 失败
+        StepDiagnosis.Result failCl = StepDiagnosis.of(cl, 5, 1, cp, null, null, 0);
+        check(failCl.level == StepDiagnosis.Level.FAILED && failCl.headline.contains("CarLife"),
+                "没有 CarPlay 失败时用 CarLife");
+
+        // 失败也带停住时长
+        StepDiagnosis.Result failMs = StepDiagnosis.of(cl, null, 1, cp, null, null, 12300);
+        check(failMs.text().contains("12.3s"), "失败文案带停住时长");
+
+        // 两条链都到终态
+        StepDiagnosis.Result done = StepDiagnosis.of(cl, 2, null, cp, 3, null, 0);
+        check(done.level == StepDiagnosis.Level.DONE, "都到终态 → DONE");
+
+        // 越界 / 空 / null 不抛
+        StepDiagnosis.Result edge = StepDiagnosis.of(new String[0], 0, 0, null, null, null, 0);
+        check(edge.level == StepDiagnosis.Level.IDLE, "空数组与越界安全降级");
+        check(StepDiagnosis.hintFor(null).isEmpty(), "null 标签不抛");
+    }
 
     private static void section(String name) {
         System.out.println();

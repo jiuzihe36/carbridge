@@ -952,6 +952,14 @@
                         android:progress="0"
                         android:progressDrawable="@drawable/bg_progress" />
 
+                    <TextView
+                        android:id="@+id/step_diagnosis"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:textColor="@color/text_muted"
+                        android:textSize="13sp" />
+
                     <LinearLayout
                         android:id="@+id/steps_container"
                         android:layout_width="match_parent"
