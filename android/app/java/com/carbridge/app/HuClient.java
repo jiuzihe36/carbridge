@@ -1644,8 +1644,14 @@ public final class HuClient {
                 }
             }
         } catch (Throwable t) {
-            if (running) {
-                log("视频通道异常：" + t);
+            if (running && gen == mediaGen) {
+                // 帧体读取、sink 回调（本机预览）任何一步抛异常都会让线程静默退出，
+                // 而 CMD 心跳还在刷新活性 → 黑屏且永不重连。按整轮故障处理。
+                log("视频通道异常：" + t + " → 判链路故障并重建会话");
+                markFault(Fault.SILENT);
+                closeAll();
+            } else if (running) {
+                log("视频通道异常（旧会话，忽略）：" + t);
             }
         }
     }
