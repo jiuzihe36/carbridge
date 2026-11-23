@@ -614,7 +614,7 @@ public final class AirPlaySession {
         out.write(RtspMessage.request("POST", path, thisCseq, body,
                 "application/pairing+tlv8", extra));
         out.flush();
-        RtspMessage.Response r = RtspMessage.readResponse(control.getInputStream());
+        RtspMessage.Response r = readControlResponseFor(thisCseq, "TLV8 " + path);
         if (r == null) throw new IOException("无响应: " + path);
         if (!r.isSuccess()) log("配对 RTSP " + r.status + " for " + path);
         // 诊断：把原始 body 打出来，便于判断对端回的是 TLV8 还是 RTSP 错误页
@@ -2064,7 +2064,7 @@ public final class AirPlaySession {
         out.flush();
 
         // 3) 响应：配对后同样是整条密文，边读边解出明文再解析
-        RtspMessage.Response r = readControlResponse();
+        RtspMessage.Response r = readControlResponseFor(thisCseq, method + " " + path);
         if (r == null) throw new IOException("无响应: " + method + " " + path);
         if (verbose) {
             log("← " + method + " " + path + " status=" + r.status + " cseq=" + r.cseq
@@ -2098,6 +2098,26 @@ public final class AirPlaySession {
     /** 非 2xx 响应的抽样计数与上次记录时刻。 */
     private int errLogged;
     private long lastErrLogMs;
+
+    /**
+     * 读一条**属于这次请求**的控制响应。
+     *
+     * <p>为什么要校验 CSeq：控制通道是一次超时就会错位的流。之前某个请求 8 秒超时后，
+     * 车机迟到的响应还留在流里，下一个请求会把别人的响应当成自己的 —— 从此所有响应
+     * 永久错位（SETUP 拿到 /info 的 body 之类），而且不会触发重连。
+     *
+     * <p>对端不带 CSeq（-1）时直接接受：有些实现的事件通道响应确实没有这一行，
+     * 不能因为缺字段就判死。
+     */
+    private RtspMessage.Response readControlResponseFor(int expectedCseq, String what) throws IOException {
+        for (int i = 0; i < 4; i++) {
+            RtspMessage.Response r = readControlResponse();
+            if (r == null) return null;
+            if (r.cseq < 0 || r.cseq == expectedCseq) return r;
+            log("⚠ 丢弃错位响应（cseq=" + r.cseq + "，期望 " + expectedCseq + "）：" + what);
+        }
+        throw new IOException("控制通道响应持续错位（CSeq 连续不匹配）：" + what);
+    }
 
     /**
      * 读一条控制响应。

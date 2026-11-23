@@ -130,7 +130,10 @@ public final class HuClient {
     /** 当前连接步骤（UI 用）。 */
     private volatile Step step = Step.WAITING_CHANNEL;
 
-    private final Socket[] socks = new Socket[HU_SLOTS];
+    /** 六条通道的 socket。用 AtomicReferenceArray 而不是裸数组：连接/拆链线程写、
+     *  心跳与触摸线程读，裸数组没有 happens-before，会读到 null 或已关闭的旧 socket。 */
+    private final java.util.concurrent.atomic.AtomicReferenceArray<Socket> socks =
+            new java.util.concurrent.atomic.AtomicReferenceArray<>(HU_SLOTS);
     private volatile int[] activePorts = HuProto.WIFI_PORTS;
     private volatile boolean videoReading;
     /** 音乐音频最后一次到达的时刻：用于判断「音乐是不是正闲着」。 */
@@ -454,7 +457,7 @@ public final class HuClient {
         }
         int old = fps;
         fps = newFps;
-        if (!streamStarted || socks[0] == null) {
+        if (!streamStarted || socks.get(0) == null) {
             log("帧率目标从 @" + old + " 改为 @" + newFps + "（等待编码器初始化）");
             notifyEncoderInfo();
             return;
@@ -468,6 +471,7 @@ public final class HuClient {
         if (!sent) {
             liveFrameRateChange = false;
             frameRateChanging = false;
+            fps = old;   // 发送失败不能把 fps 留在新值上：触摸换算和 UI 都读它
         }
         log((sent ? "→ 动态帧率 " : "⚠ 动态帧率发送失败 ")
                 + "@" + old + " → @" + newFps + "（0x1800C，不重连）");
@@ -613,8 +617,8 @@ public final class HuClient {
         hbGen++;                       // 让这一轮的心跳线程自己退出
         startScheduled = false;        // 取消还没发出的 START
         for (int i = 0; i < HU_SLOTS; i++) {
-            closeQuietly(socks[i]);
-            socks[i] = null;
+            closeQuietly(socks.get(i));
+            socks.set(i, null);
         }
     }
 
@@ -934,13 +938,13 @@ public final class HuClient {
         setState(State.CONNECTING, "连接 6 条通道");
         enterStep(Step.CONNECT_CHANNELS);
         for (int i = 0; i < HU_SLOTS; i++) {
-            socks[i] = connect(ports[i]);
-            if (socks[i] == null) {
+            socks.set(i, connect(ports[i]));
+            if (socks.get(i) == null) {
                 log("通道 " + i + "（" + ports[i] + "）连不上，重试一次");
                 sleep(400);
-                socks[i] = connect(ports[i]);
+                socks.set(i, connect(ports[i]));
             }
-            if (socks[i] == null) {
+            if (socks.get(i) == null) {
                 sink.onStepFailed(Step.CONNECT_CHANNELS, "通道 " + ports[i] + " 连不上");
                 return false;
             }
@@ -1250,13 +1254,13 @@ public final class HuClient {
     private boolean ctrlLoop(int windowMs) {
         boolean answered = false;
         try {
-            if (windowMs > 0 && socks[0] != null) {
-                socks[0].setSoTimeout(windowMs);
+            if (windowMs > 0 && socks.get(0) != null) {
+                socks.get(0).setSoTimeout(windowMs);
             }
             while (running) {
                 byte[] head;
                 try {
-                    head = readExact(socks[0], 8);
+                    head = readExact(socks.get(0), 8);
                 } catch (java.net.SocketTimeoutException te) {
                     // TCP 是通的、对端只是不回 —— 不是「死」，是「这段窗内没有动静」。
                     // 定性为 SILENT 交给上层决定要不要继续等，**不能**当成失败去重连。
@@ -1278,7 +1282,7 @@ public final class HuClient {
                 }
                 int len = HuProto.cmdLength(head);
                 int service = HuProto.cmdService(head);
-                byte[] body = len > 0 ? readExact(socks[0], len) : new byte[0];
+                byte[] body = len > 0 ? readExact(socks.get(0), len) : new byte[0];
                 if (body == null) {
                     log("控制通道负载读取失败");
                     return answered;
@@ -1561,7 +1565,7 @@ public final class HuClient {
     }
 
     private void videoLoop(final int gen) {
-        Socket s = socks[1];
+        Socket s = socks.get(1);
         if (s == null) {
             log("视频通道不存在");
             return;
@@ -1699,7 +1703,7 @@ public final class HuClient {
             // gen 守卫：会话一旦被 closeAll() 换代就退出，避免旧线程永远占着
             // audioReading（其阻塞读在套接字被关后才会返回，期间新会话起不来音频线程）
             while (running && gen == mediaGen) {
-                Socket s = socks[2];
+                Socket s = socks.get(2);
                 if (s == null) {
                     log("音频通道不存在");
                     return;
@@ -1801,7 +1805,7 @@ public final class HuClient {
                 int rate = 16000;
                 int channels = 1;
                 try {
-                    Socket s = socks[slot];
+                    Socket s = socks.get(slot);
                     if (s == null) {
                         return;
                     }
@@ -1913,7 +1917,7 @@ public final class HuClient {
      * @return true = 已排队发送
      */
     public boolean sendHardKey(final int carLifeKeycode) {
-        final Socket s = socks[5];
+        final Socket s = socks.get(5);
         if (s == null || !running) {
             log("硬键发送失败：TOUCH 通道没连上");
             return false;
@@ -1953,7 +1957,7 @@ public final class HuClient {
     }
 
     public boolean sendTouch(final int action, final int x, final int y) {
-        final Socket s = socks[5];
+        final Socket s = socks.get(5);
         if (s == null || !running) {
             return false;
         }
@@ -2002,7 +2006,7 @@ public final class HuClient {
      * 用于试探真实 Car+ 是否只认专用/高层触摸消息，而非合并式的 0x00068001。
      */
     public boolean sendSingleClick(final int x, final int y) {
-        final Socket s = socks[5];
+        final Socket s = socks.get(5);
         if (s == null || !running) {
             return false;
         }
@@ -2138,7 +2142,7 @@ public final class HuClient {
      * @return true=写成功；false=通道为空或写失败（对端可能已断）
      */
     private synchronized boolean send(int slot, int serviceType, byte[] body) {
-        Socket s = socks[slot];
+        Socket s = socks.get(slot);
         if (s == null) {
             return false;
         }
