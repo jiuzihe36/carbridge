@@ -99,6 +99,28 @@ public final class CarPlaySdpBeacon {
     }
 
     /**
+     * 清理「暂存太久、一直没人接管」的车机 iAP2 socket。
+     *
+     * <p>发送端没起来时车机连上来会被暂存（见 {@code handoff}）。以前只有下一次
+     * attachIap2Sink 才会按年龄丢弃 —— 如果用户一直不点连接，这个 socket 就一直挂着：
+     * fd 泄漏，而且车机以为 iAP2 会话还在，不再重连。
+     * 由常驻服务的 10 秒健康检查调用。
+     */
+    public static synchronized void expirePendingIap2() {
+        BluetoothSocket p = pendingIap2;
+        if (p == null) return;
+        long ageMs = Math.max(0L, System.currentTimeMillis() - pendingIap2At);
+        if (ageMs <= PENDING_IAP2_MAX_AGE_MS) return;
+        pendingIap2 = null;
+        pendingIap2At = 0L;
+        try {
+            p.close();
+        } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("SdpBeacon", t);
+        }
+        emit(null, "暂存的车机 iAP2 连接超过 " + (ageMs / 1000) + "s 无人接管 → 关闭，等它重连");
+    }
+
+    /**
      * 让本机在蓝牙 inquiry 里**可被发现**。
      *
      * <p>为什么需要：车机的 CarPlay app 是靠**经典蓝牙扫描**发现手机的

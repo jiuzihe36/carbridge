@@ -733,7 +733,7 @@ public final class Iap2SenderSession {
      * 看门狗调用：超时没收到 0xAA03 就换下一个长度档位重发。
      * 必须由外部驱动（协议核心里没有定时器），用 {@link #currentChallengeTimeoutMs()} 定时。
      */
-    public void retryChallenge() {
+    public synchronized void retryChallenge() {
         if (!challengeSent || challengeIndex < 0) return;
         log("MFi 挑战 " + CHALLENGE_LENGTHS[challengeIndex] + "B 超时，回退下一档");
         challengeSent = false;

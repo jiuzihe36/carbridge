@@ -230,6 +230,8 @@ public final class HuClient {
      * 所以它不会变成新的「死等」。
      */
     private static final int STREAM_OBSERVE_MS = 10_000;
+    /** 视频通道多久没任何数据（含空帧）就告警。只告警，不拆会话（CarLife 变化驱动）。 */
+    private static final long VIDEO_QUIET_WARN_MS = 15_000L;
     private volatile long startedAt;
     private volatile long firstFrameAt;
     /** 进入「编码器协商」步的时刻（协议看门狗：10s 无首帧则判超时重建会话）。 */
@@ -667,6 +669,7 @@ public final class HuClient {
             // 每次尝试单独计时：否则重连几轮之后，「首帧延迟」会把重连耗时也算进去
             // （现场看到 2-3s 变成 10s+，其实真实首帧仍是几秒）。
             startedAt = System.currentTimeMillis();
+            lastVideoRxAtMs = startedAt;
             if (attempt > 1) coldStart = false;
             log("── 第 " + attempt + " 次尝试 ──");
             boolean prevStreamed = firstFrameAt > 0;
@@ -774,6 +777,19 @@ public final class HuClient {
                 while (running) {
                     long before = lastRxAtMs;
                     ctrlLoop(windowMs);
+                    // ⚠️ 视频要单独判活：CMD 心跳会一直刷新 lastRxAtMs，
+                    //    视频停摆（连 len==0 空帧都不再出现）不会体现在全局活性上，
+                    //    以前的表现就是「日志一直在刷心跳、画面冻住、永不重连」。
+                    //    这里只告警不改行为：CarLife 是变化驱动的，静止画面本来就可能帧少。
+                    if (streamStarted) {
+                        long nowMs = System.currentTimeMillis();
+                        long vAge = Math.max(0L, nowMs - lastVideoRxAtMs);
+                        if (vAge > VIDEO_QUIET_WARN_MS && nowMs - lastVideoWarnMs > 60_000) {
+                            lastVideoWarnMs = nowMs;
+                            log("⚠ 视频通道 " + (vAge / 1000) + "s 没有任何数据（含空帧）"
+                                    + "—— 画面可能已停；CMD 心跳仍在，判定为可疑但不拆会话");
+                        }
+                    }
                     // 判「在不在动」看**任意通道**最近一帧的时刻，而不是只看 CMD：
                     // 推流时视频帧一直在走、CMD 可以很稀疏，只看 CMD 会把正常会话判成停滞。
                     if (lastRxAtMs > before) {
@@ -1776,6 +1792,7 @@ public final class HuClient {
                     // 空帧是「这条通道还活着」的证据，必须刷新活性时间戳，
                     // 否则画面静止时（Car+ 只发空帧）会被外层观察窗判成停滞。
                     lastRxAtMs = System.currentTimeMillis();
+                    lastVideoRxAtMs = System.currentTimeMillis();
                     emptyFrames++;
                     if (emptyFrames == 1 || emptyFrames % 200 == 0) {
                         log("视频空帧（len=0）已跳过 " + emptyFrames + " 个（心跳/占位，不断会话）");
@@ -1805,6 +1822,7 @@ public final class HuClient {
                     log("★ 首帧到达：len=" + len + " 头 " + HuProto.hex(payload, 12)
                             + "（首帧延迟 " + (firstFrameAt - startedAt) + "ms）");
                 }
+                lastVideoRxAtMs = System.currentTimeMillis();
                 frameCount++;
                 byteCount += len;
                 // 交给 CarPlay 发送端推给车机（bridge 为 null 时只做本机预览）
@@ -2081,6 +2099,39 @@ public final class HuClient {
     // ------------------------------------------------------------- 触摸
 
     /**
+     * 触摸通道专用写锁。
+     *
+     * <p>⚠️ 以前和 {@code send()} 共用 {@code synchronized (HuClient.this)}：一次触摸写
+     * 卡住（车机不读 9340）会把心跳与全部 CMD 应答一起堵在这把锁上，整个会话僵死。
+     * 触摸只写 socks[5]，没有和别的通道共享的数据，独立一把锁就够。
+     */
+    private final Object touchWriteLock = new Object();
+
+    /**
+     * 把一帧写进 TOUCH 通道（必须在 touch 线程上调用）。
+     *
+     * <p>⚠️ socket **在执行的这一刻现取**，不能用入队时捕获的那个：断开/重连之后
+     * 旧的 socket 已经关了，往它写只会失败；而调用方早就返回了 true。
+     */
+    private boolean writeTouchFrame(byte[] frame, String what) {
+        Socket s = socks.get(5);
+        if (s == null || s.isClosed()) {
+            return false;
+        }
+        try {
+            OutputStream out = s.getOutputStream();
+            synchronized (touchWriteLock) {
+                out.write(frame);
+                out.flush();
+            }
+            return true;
+        } catch (Throwable t) {
+            log(what + "发送失败：" + t);
+            return false;
+        }
+    }
+
+    /**
      * 发车机硬键到手机（CarLife TOUCH 通道 {@code 0x00068008}）。
      *
      * <p>载荷 = protobuf {@code CarlifeCarHardKeyCode{ required int32 keycode = 1 }}。
@@ -2112,24 +2163,21 @@ public final class HuClient {
             touchHandler = startTouchThread();
             h = touchHandler;
         }
-        h.post(new Runnable() {
+        byte[] frame = HuProto.frame(HuProto.CH_TOUCH, HuProto.HU_CAR_HARD_KEY_CODE,
+                HuProto.pbInt(1, sendKey));
+        boolean posted = h.post(new Runnable() {
             @Override
             public void run() {
-                try {
-                    OutputStream out = s.getOutputStream();
-                    byte[] frame = HuProto.frame(HuProto.CH_TOUCH, HuProto.HU_CAR_HARD_KEY_CODE,
-                            HuProto.pbInt(1, sendKey));
-                    synchronized (HuClient.this) {
-                        out.write(frame);
-                        out.flush();
-                    }
+                if (writeTouchFrame(frame, "硬键")) {
                     log("→ 车机硬键 " + HuProto.CarHardKey.name(sendKey)
                             + "（keycode=" + sendKey + "）写入 " + frame.length + "B");
-                } catch (Throwable t) {
-                    log("硬键发送失败：" + t);
                 }
             }
         });
+        if (!posted) {
+            log("硬键未入队（触摸线程已退出），丢弃本条");
+            return false;
+        }
         return true;
     }
 
@@ -2144,35 +2192,38 @@ public final class HuClient {
             touchHandler = startTouchThread();
             h = touchHandler;
         }
-        h.post(new Runnable() {
+        byte[] frame = HuProto.frame(HuProto.CH_TOUCH, HuProto.HU_TOUCH_ACTION,
+                HuProto.touch(action, x, y));
+        boolean posted = h.post(new Runnable() {
             @Override
             public void run() {
-                try {
-                    OutputStream out = s.getOutputStream();
-                    byte[] frame = HuProto.frame(HuProto.CH_TOUCH, HuProto.HU_TOUCH_ACTION,
-                            HuProto.touch(action, x, y));
-                    synchronized (HuClient.this) {
-                        out.write(frame);
-                        out.flush();
+                if (!writeTouchFrame(frame, "触摸")) {
+                    return;
+                }
+                // 限流 + 抽样：计数只在限流命中时涨，避免未命中时重复命中同一档
+                long now = System.currentTimeMillis();
+                if (now - lastTouchLogMs > 1500) {
+                    lastTouchLogMs = now;
+                    int n = ++touchWriteCount;
+                    if (n <= 5 || n % 200 == 0) {
+                        Socket cur = socks.get(5);
+                        log("→ 触摸#" + n + " action=" + action + " (" + x + "," + y
+                                + ") 写入 " + frame.length + "B CTRL(socks[5]="
+                                + (cur == null || cur.isClosed() ? "closed" : "ok") + ")");
                     }
-                    // 限流 + 抽样：计数只在限流命中时涨，避免未命中时重复命中同一档
-                    long now = System.currentTimeMillis();
-                    if (now - lastTouchLogMs > 1500) {
-                        lastTouchLogMs = now;
-                        int n = ++touchWriteCount;
-                        if (n <= 5 || n % 200 == 0) {
-                            log("→ 触摸#" + n + " action=" + action + " (" + x + "," + y
-                                    + ") 写入 " + frame.length + "B CTRL(socks[5]="
-                                    + (s.isClosed() ? "closed" : "ok") + ")");
-                        }
-                    }
-                } catch (Throwable t) {
-                    log("触摸发送失败：" + t);
                 }
             }
         });
+        if (!posted) {
+            return false;
+        }
         return true;
     }
+
+    /** 最近一次从视频通道读到任何数据（含 len==0 空帧）的时刻。 */
+    private volatile long lastVideoRxAtMs;
+    /** 视频静默告警的限流时刻（每 60s 最多一条）。 */
+    private volatile long lastVideoWarnMs;
 
     /** 触摸写出确认日志的限流时刻与累计次数。 */
     private volatile long lastTouchLogMs;
@@ -2192,23 +2243,20 @@ public final class HuClient {
             touchHandler = startTouchThread();
             h = touchHandler;
         }
-        h.post(new Runnable() {
+        byte[] frame = HuProto.frame(HuProto.CH_TOUCH, HuProto.HU_TOUCH_SINGLE_CLICK,
+                HuProto.singleClick(x, y));
+        boolean posted = h.post(new Runnable() {
             @Override
             public void run() {
-                try {
-                    OutputStream out = s.getOutputStream();
-                    byte[] frame = HuProto.frame(HuProto.CH_TOUCH, HuProto.HU_TOUCH_SINGLE_CLICK,
-                            HuProto.singleClick(x, y));
-                    synchronized (HuClient.this) {
-                        out.write(frame);
-                        out.flush();
-                    }
+                if (writeTouchFrame(frame, "单击")) {
                     log("→ 单击指令 (" + x + "," + y + ") 写入 " + frame.length + "B");
-                } catch (Throwable t) {
-                    log("单击发送失败：" + t);
                 }
             }
         });
+        if (!posted) {
+            log("单击未入队（触摸线程已退出），丢弃本条");
+            return false;
+        }
         return true;
     }
 

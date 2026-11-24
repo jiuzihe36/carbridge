@@ -294,6 +294,10 @@ public final class CarPlayWirelessTx {
         pendingWifi = null;
         wifiRetry = 0;
         joinedBssid = null;
+        // 会话标志要跟着停：留着 true 会让下一次「延迟入网/重复凭据」全被当成
+        // 「已经在投屏」而跳过，表现是停了再开连不上热点。
+        airplaySessionActive = false;
+        networkPrepared = false;
         // 退出车机模式：把本机铃声音量还回去（静音过的话）
         com.carbridge.carplay.audio.CarAudioRouter.restoreRingVolume(ctx,
                 new com.carbridge.carplay.audio.CarAudioRouter.Log() {

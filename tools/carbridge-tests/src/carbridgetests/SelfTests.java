@@ -44,6 +44,7 @@ public final class SelfTests {
         airPlayInfo();
         hid();
         rtsp();
+        hidKeys();
         linkEngine();
 
         System.out.println();
@@ -853,6 +854,89 @@ public final class SelfTests {
 
         check(com.carbridge.carplay.core.HidInput.parseTouch(new byte[]{0x01, 0, 0, 0, 0}).down,
                 "5 字节单指报告：down 取首字节");
+    }
+
+    // ---------------------------------------------------------------- HID 按键
+
+    private static void hidKeys() {
+        section("HidKeyMap（车机硬键 / Report ID）");
+
+        // Consumer Control，Array 语义，Report ID = 2
+        byte[] arrayDesc = new byte[]{
+                0x05, 0x0C,             // Usage Page (Consumer)
+                0x09, 0x01,             // Usage (Consumer Control)
+                (byte) 0xA1, 0x01,      // Collection (Application)
+                (byte) 0x85, 0x02,      //   Report ID (2)
+                0x09, (byte) 0xB0,      //   Usage (Play)
+                0x09, (byte) 0xB1,      //   Usage (Pause)
+                0x09, (byte) 0xB5,      //   Usage (Scan Next)
+                0x15, 0x00,             //   Logical Minimum (0)
+                0x25, 0x02,             //   Logical Maximum (2)
+                0x75, 0x08,             //   Report Size (8)
+                (byte) 0x95, 0x01,      //   Report Count (1)
+                (byte) 0x81, 0x00,      //   Input (Data,Array,Abs)
+                (byte) 0xC0             // End Collection
+        };
+        com.carbridge.carplay.core.HidKeyMap arr =
+                com.carbridge.carplay.core.HidKeyMap.parse(arrayDesc);
+        check(arr != null, "Array 描述符解析成功");
+        check(arr != null && arr.array, "识别为 Array 语义");
+        check(arr != null && arr.reportId == 2, "解析出 Report ID = 2");
+        check(arr != null && arr.page == 0x0C, "识别为 Consumer 页");
+        check(arr != null && arr.usages.length == 3, "收集到 3 个 usage");
+
+        int[] p1 = arr.pressedUsages(new byte[]{0x02, 0x01});
+        check(p1.length == 1 && p1[0] == 0xB1, "带 ID 的报告：下标 1 → Pause（不被 ID 挤偏）");
+        int[] p0 = arr.pressedUsages(new byte[]{0x02, 0x00});
+        check(p0.length == 0, "报告值 0 → 无按键（释放）");
+        int[] pOut = arr.pressedUsages(new byte[]{0x02, 0x09});
+        check(pOut.length == 0, "下标越界 → 无按键，不抛异常");
+        int[] noId = arr.pressedUsages(new byte[]{0x01, 0x01});
+        check(noId.length == 1 && noId[0] == 0xB1, "首字节不是 Report ID → 不剥，仍按下标解");
+
+        // Variable/位图语义，Report ID = 3
+        byte[] bitDesc = new byte[]{
+                0x05, 0x0C, 0x09, 0x01, (byte) 0xA1, 0x01,
+                (byte) 0x85, 0x03,
+                0x09, (byte) 0xB0, 0x09, (byte) 0xB1, 0x09, (byte) 0xB5,
+                0x15, 0x00, 0x25, 0x01,
+                0x75, 0x01, (byte) 0x95, 0x03,
+                (byte) 0x81, 0x02,
+                (byte) 0xC0
+        };
+        com.carbridge.carplay.core.HidKeyMap bits =
+                com.carbridge.carplay.core.HidKeyMap.parse(bitDesc);
+        check(bits != null && !bits.array, "识别为 Variable/位图语义");
+        int[] pressed = bits.pressedUsages(new byte[]{0x03, 0x05});   // bit0 + bit2
+        check(pressed.length == 2 && pressed[0] == 0xB0 && pressed[1] == 0xB5,
+                "位图 0b101 → Play + Scan Next");
+        check(bits.pressedUsages(new byte[]{0x03, 0x00}).length == 0, "位图全 0 → 无按键");
+        int[] noIdBits = bits.pressedUsages(new byte[]{0x02});        // 无 ID 的位图报告
+        check(noIdBits.length == 1 && noIdBits[0] == 0xB1,
+                "位图报告不带 ID 时也能解（bit1 → Pause）");
+
+        // Telephony 页
+        byte[] telDesc = new byte[]{
+                0x05, 0x0B, 0x09, 0x05, (byte) 0xA1, 0x01,
+                0x09, 0x20, 0x15, 0x00, 0x25, 0x01,
+                0x75, 0x08, (byte) 0x95, 0x01, (byte) 0x81, 0x00,
+                (byte) 0xC0
+        };
+        com.carbridge.carplay.core.HidKeyMap tel =
+                com.carbridge.carplay.core.HidKeyMap.parse(telDesc);
+        check(tel != null && tel.page == 0x0B, "Telephony 页识别");
+        check(tel != null && tel.usages.length == 1 && tel.usages[0] == 0x20,
+                "收集到 Hook Switch usage");
+        check(tel != null && tel.usageFor(1) == -1, "只有 1 个 usage：下标 1 越界 → -1");
+
+        check(com.carbridge.carplay.core.HidKeyMap.parse(null) == null, "null 描述符 → null");
+        check(com.carbridge.carplay.core.HidKeyMap.parse(new byte[]{0x05, 0x0D}) == null,
+                "非按键描述符 → null");
+
+        // usageFor 语义
+        check(arr.usageFor(0) == -1, "Array：值 0 → -1");
+        check(arr.usageFor(1) == 0xB1, "Array：值 1 → Pause");
+        check(bits.usageFor(0xB5) == 0xB5, "Variable：值就是 usage 本身");
     }
 
     // ---------------------------------------------------------------- RTSP

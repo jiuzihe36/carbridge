@@ -47,6 +47,7 @@ public final class SdpBeaconService extends Service {
             try {
                 BluetoothManager bm = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
                 BluetoothAdapter adapter = bm == null ? null : bm.getAdapter();
+                CarPlaySdpBeacon.expirePendingIap2();
                 CarPlaySdpBeacon.reviveIfDead(adapter, new CarPlaySdpBeacon.Log() {
                     @Override
                     public void onLog(String line) {
