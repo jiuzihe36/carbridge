@@ -72,6 +72,12 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
     private final StringBuilder sessionTimeline = new StringBuilder();
     // ---- 自动重连 ----
     private boolean userWantsConnected;
+    /** Activity 已销毁：所有延迟任务/异步回调都要据此放手（否则会重建会话、弹窗崩）。 */
+    private volatile boolean destroyed;
+    /** 启动 3 秒后的自动连接（手动断开时要能取消）。 */
+    private Runnable autoConnectOnce;
+    /** 已排队的自动重连（ERROR 与 CLOSED 会连着来，必须幂等）。 */
+    private Runnable reconnectRunnable;
     private int retryStep;
     private TextView autoReconnectRow;
 
@@ -388,14 +394,19 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         }, 100L);
         // Car+ 的通道窗口很短，进来就自动连；推流仍按原来的流程，
         // 与上面的 CarPlay 鉴权并行，互不等待。
-        main.postDelayed(new Runnable() {
+        autoConnectOnce = new Runnable() {
             @Override
             public void run() {
+                // ⚠️ 必须看用户意图：打开 App 后 3 秒内手动「连接→断开」时，
+                //    以前这里只看 client 是否在跑，会立刻把连接重新拉起来
+                //    （连 KeepAlive 的三个锁一起），用户视角是「我断了它自己又连上」。
+                if (destroyed || isFinishing() || !userWantsConnected) return;
                 if (client == null || !client.isRunning()) {
                     toggleConnect();
                 }
             }
-        }, 3000L);
+        };
+        main.postDelayed(autoConnectOnce, 3000L);
     }
     // ------------------------------------------------------------- 画质设置
     /**
@@ -524,6 +535,19 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
      * 宁可屏幕上显示一个对的数，也不能把 {@code 0} 或 {@code abc} 发给手机。
      */
     private void commitResolution() {
+        commitResolution(true);
+    }
+
+    /**
+     * 把输入框里的内容读出来、校验、落盘。
+     *
+     * @param userInitiated true = 用户真的编辑完（失焦）；false = 连接前顺手收一次输入框
+     *
+     * <p>⚠️ 两者必须分开：以前「连接前顺手收一次」也走同一套逻辑，用户宽度框刚敲到
+     * 「19」时链路断开触发重连，就会被夹成 320、判成「用户手改」→ autoFit 被静默关掉
+     * 并落盘，之后每次连接都请求 320 宽，再也自恢复不了。
+     */
+    private void commitResolution(boolean userInitiated) {
         if (editWidth == null || editHeight == null) {
             return;
         }
@@ -532,15 +556,42 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         if (w == encWidth && h == encHeight) {
             return;
         }
+        if (userInitiated) {
+            encWidth = w;
+            encHeight = h;
+            autoFit = false;          // 手动改分辨率 = 放弃自动跟随
+            editWidth.setText(String.valueOf(w));
+            editHeight.setText(String.valueOf(h));
+            persistQuality();
+            updateQualityTargetView();
+            if (client != null) client.setAutoFit(false);
+            log("画质：分辨率改为 " + w + "×" + h + "，自动适配已关闭（下次连接生效）");
+            return;
+        }
+        // 非用户编辑：只有输入是完整合法值才采用；半截输入（如「19」）保持原值不动
+        if (!isCompleteDim(editWidth) || !isCompleteDim(editHeight)) {
+            editWidth.setText(String.valueOf(encWidth));
+            editHeight.setText(String.valueOf(encHeight));
+            return;
+        }
         encWidth = w;
         encHeight = h;
-        autoFit = false;          // 手动改分辨率 = 放弃自动跟随
         editWidth.setText(String.valueOf(w));
         editHeight.setText(String.valueOf(h));
         persistQuality();
         updateQualityTargetView();
-        if (client != null) client.setAutoFit(false);
-        log("画质：分辨率改为 " + w + "×" + h + "，自动适配已关闭（下次连接生效）");
+        log("画质：采用输入框里的 " + w + "×" + h + "（自动适配保持"
+                + (autoFit ? "开" : "关") + "）");
+    }
+
+    /** 输入框里是不是一个「敲完了」的合法分辨率（半截数字不算）。 */
+    private static boolean isCompleteDim(EditText e) {
+        try {
+            int v = Integer.parseInt(e.getText() == null ? "" : e.getText().toString().trim());
+            return v >= QualityPrefs.MIN_DIM && v <= QualityPrefs.MAX_DIM;
+        } catch (Throwable t) {
+            return false;
+        }
     }
     /** 读输入框 → 越界夹到合法区间 → 空/非法回落默认值。 */
     private static int parseDim(EditText e, int fallback) {
@@ -672,9 +723,15 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         return carPlay;
     }
     private void toggleConnect() {
+        if (destroyed || isFinishing()) return;
         if (client != null && client.isRunning()) {
             userWantsConnected = false;    // 手动断开：取消自动重连
             retryStep = 0;
+            // 把已排队的「自动连接 / 自动重连」一起取消：只置标志位不够，
+            // 3s 自动连接那条定时器曾经会在断开后把会话重新拉起来。
+            if (autoConnectOnce != null) main.removeCallbacks(autoConnectOnce);
+            if (reconnectRunnable != null) main.removeCallbacks(reconnectRunnable);
+            reconnectRunnable = null;
             client.stop();
             client = null;
             autoCarplayArmed = false;      // 断开后不再自动拉推流
@@ -698,7 +755,7 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         // 编码参数：自动模式优先使用上一次车机 /info 的画布；首次连接还没有车机
         // 数据时回退到手动参数。真正的采用值仍以 Car+ 的 MD_VIDEO_ENCODER_INIT 为准。
         // 连接前先收一次输入框：用户可能刚敲完数字还没失焦，不收就用的是旧值。
-        commitResolution();
+        commitResolution(false);
         int[] params = encoderParamsForStart();
         client.setAutoFit(autoFit);
         client.setEncoderSize(params[0], params[1], params[2]);
@@ -978,6 +1035,10 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
     }
 
     private void scheduleAutoReconnect() {
+        if (destroyed || isFinishing()) return;
+        // ⚠️ ERROR 与 CLOSED 常常接连到达：以前两个都排一次（退避档位被消耗两次，
+        //    等于 4 档预算对半砍）。同一次断开只允许有一条排队。
+        if (reconnectRunnable != null) return;
         if (retryStep >= RETRY_DELAYS.length) {
             log("自动重连：已重试 " + retryStep + " 次仍失败，停止自动重试（手动点「连接」可再试）");
             return;
@@ -985,14 +1046,19 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         final long delay = RETRY_DELAYS[retryStep];
         retryStep++;
         log("自动重连：第 " + retryStep + " 次，" + (delay / 1000) + "s 后重试");
-        main.postDelayed(new Runnable() {
+        reconnectRunnable = new Runnable() {
             @Override
             public void run() {
-                if (userWantsConnected && (client == null || !client.isRunning())) {
+                reconnectRunnable = null;
+                // 执行时再复查一次：排队之后用户可能关掉了「自动重连」开关。
+                if (destroyed || isFinishing()) return;
+                if (userWantsConnected && autoReconnectEnabled()
+                        && (client == null || !client.isRunning())) {
                     toggleConnect();
                 }
             }
-        }, delay);
+        };
+        main.postDelayed(reconnectRunnable, delay);
     }
 
     private void refreshAutoReconnectRow() {
@@ -1004,36 +1070,64 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
     // ------------------------------------------------------------ 诊断包
     /** 打包：会话日志 + 本机身份 + 配置 + 会话耗时汇总 → 一个 zip，方便整个发出来。 */
     private void exportDiagPack() {
-        try {
-            java.io.File dir = new java.io.File(getExternalFilesDir(null), "diag");
-            if (!dir.isDirectory() && !dir.mkdirs()) throw new java.io.IOException("建目录失败 " + dir);
-            java.io.File out = new java.io.File(dir,
-                    "carbridge-diag-" + new java.text.SimpleDateFormat("MMdd-HHmmss", java.util.Locale.US)
-                            .format(new Date()) + ".zip");
-            try (java.util.zip.ZipOutputStream z =
-                         new java.util.zip.ZipOutputStream(new java.io.FileOutputStream(out))) {
-                put(z, "session.log", readAll(logFile()));
-                StringBuilder dev = new StringBuilder();
-                dev.append("时间: ").append(new Date()).append('\n');
-                dev.append("机型: ").append(android.os.Build.MANUFACTURER).append(' ')
-                        .append(android.os.Build.MODEL).append(" / Android ")
-                        .append(android.os.Build.VERSION.RELEASE).append('\n');
-                dev.append("蓝牙名/地址: ").append(BtIdentity.peek(this).mac).append('\n');
-                dev.append("车机识别: ").append(CarPlaySdpBeacon.statusLine()).append('\n');
-                dev.append("广播版本 srcvers: ").append(CarPlayCtrlCompat.srcvers(this)).append('\n');
-                dev.append("画质自动适配: ").append(autoFit).append(" / 车机画布 ")
-                        .append(carW).append('x').append(carH).append('@').append(carFps).append('\n');
-                dev.append("自动重连: ").append(autoReconnectEnabled()).append('\n');
-                if (sessionTimeline.length() > 0) dev.append("本轮阶段耗时: ").append(sessionTimeline).append('\n');
-                dev.append("静默异常计数: ").append(com.carbridge.carplay.util.Diag.dump()).append('\n');
-                put(z, "device.txt", dev.toString());
+        // ⚠️ 不能在主线程做：日志最多 1MB，读 + 压缩 + 写外部存储（FUSE 慢）会卡 UI，
+        //    车机热点下出现过明显卡顿。整个导出挪到后台，结果用 main.post 回主线程。
+        toastShort("正在导出诊断包…");
+        com.carbridge.carplay.util.Bg.run("diag-export", new Runnable() {
+            @Override
+            public void run() {
+                String msg;
+                try {
+                    java.io.File out = writeDiagZip();
+                    log("诊断包已导出：" + out.getAbsolutePath());
+                    msg = "已导出：" + out.getName();
+                } catch (Throwable t) {
+                    log("✗ 诊断包导出失败：" + t);
+                    msg = "导出失败：" + t.getMessage();
+                }
+                final String m = msg;
+                main.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (!destroyed) toastShort(m);
+                    }
+                });
             }
-            log("诊断包已导出：" + out.getAbsolutePath());
-            toastShort("已导出：" + out.getName());
-        } catch (Throwable t) {
-            log("✗ 诊断包导出失败：" + t);
-            toastShort("导出失败：" + t.getMessage());
+        });
+    }
+
+    /** 真正写 zip（后台线程调用）。 */
+    private java.io.File writeDiagZip() throws java.io.IOException {
+        java.io.File dir = new java.io.File(getExternalFilesDir(null), "diag");
+        if (!dir.isDirectory() && !dir.mkdirs()) throw new java.io.IOException("建目录失败 " + dir);
+        java.io.File out = new java.io.File(dir,
+                "carbridge-diag-" + new java.text.SimpleDateFormat("MMdd-HHmmss", java.util.Locale.US)
+                        .format(new Date()) + ".zip");
+        try (java.util.zip.ZipOutputStream z =
+                     new java.util.zip.ZipOutputStream(new java.io.FileOutputStream(out))) {
+            put(z, "session.log", readAll(logFile()));
+            // 轮转出去的那半份也要进包：1MB 上限切掉的是**最新**的尾部，
+            // 只发当前文件等于手里最关键的现场恰好缺失。
+            java.io.File rotated = new java.io.File(logFile().getAbsolutePath() + ".1");
+            if (rotated.isFile()) {
+                put(z, "session.log.1", readAll(rotated));
+            }
+            StringBuilder dev = new StringBuilder();
+            dev.append("时间: ").append(new Date()).append('\n');
+            dev.append("机型: ").append(android.os.Build.MANUFACTURER).append(' ')
+                    .append(android.os.Build.MODEL).append(" / Android ")
+                    .append(android.os.Build.VERSION.RELEASE).append('\n');
+            dev.append("蓝牙名/地址: ").append(BtIdentity.peek(this).mac).append('\n');
+            dev.append("车机识别: ").append(CarPlaySdpBeacon.statusLine()).append('\n');
+            dev.append("广播版本 srcvers: ").append(CarPlayCtrlCompat.srcvers(this)).append('\n');
+            dev.append("画质自动适配: ").append(autoFit).append(" / 车机画布 ")
+                    .append(carW).append('x').append(carH).append('@').append(carFps).append('\n');
+            dev.append("自动重连: ").append(autoReconnectEnabled()).append('\n');
+            if (sessionTimeline.length() > 0) dev.append("本轮阶段耗时: ").append(sessionTimeline).append('\n');
+            dev.append("静默异常计数: ").append(com.carbridge.carplay.util.Diag.dump()).append('\n');
+            put(z, "device.txt", dev.toString());
         }
+        return out;
     }
 
     private static void put(java.util.zip.ZipOutputStream z, String name, String content)
@@ -1044,10 +1138,19 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
     }
 
     private static String readAll(java.io.File f) {
+        final int cap = 2_000_000;   // 日志本身 1MB 封顶 + 轮转文件，2MB 足够且不会失控
         try (java.io.FileInputStream in = new java.io.FileInputStream(f)) {
-            byte[] b = new byte[(int) Math.min(f.length(), 1_000_000)];
-            int n = in.read(b);
-            return new String(b, 0, Math.max(n, 0), "UTF-8");
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream(64 * 1024);
+            byte[] b = new byte[64 * 1024];
+            int n;
+            int total = 0;
+            // ⚠️ 必须循环读：单次 read() 允许短读（FUSE/网络盘上很常见），
+            //    以前只 read 一次，诊断包里的日志会被静默截断。
+            while (total < cap && (n = in.read(b, 0, Math.min(b.length, cap - total))) > 0) {
+                bos.write(b, 0, n);
+                total += n;
+            }
+            return new String(bos.toByteArray(), "UTF-8");
         } catch (Throwable t) {
             return "(读取失败 " + t + ")";
         }
@@ -1388,8 +1491,10 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         com.carbridge.carplay.util.Bg.run("pair-scan", new Runnable() {
             @Override
             public void run() {
+                // ⚠️ 这个列表由广播接收器（主线程）写、后面的 Bg 线程读：
+                //    ArrayList 并发读写会读到旧值甚至 ConcurrentModificationException。
                 final List<android.bluetooth.BluetoothDevice> found =
-                        new ArrayList<android.bluetooth.BluetoothDevice>();
+                        new java.util.concurrent.CopyOnWriteArrayList<android.bluetooth.BluetoothDevice>();
                 android.content.BroadcastReceiver receiver = new android.content.BroadcastReceiver() {
                     @Override
                     public void onReceive(Context context, Intent intent) {
@@ -1451,6 +1556,9 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
 
     /** 把搜到的设备列出来（车机排前面），点一个就 createBond。 */
     private void showPairScanResult(List<android.bluetooth.BluetoothDevice> devices) {
+        // 配对扫描最长 12 秒：期间用户可能已经退出 —— 在已销毁的 Activity 上
+        // show() 会抛 WindowManager$BadTokenException。
+        if (destroyed || isFinishing()) return;
         if (devices == null || devices.isEmpty()) {
             Toast.makeText(this, R.string.pair_scan_empty, Toast.LENGTH_LONG).show();
             return;
@@ -1795,11 +1903,11 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
     }
     private void shareLog() {
         try {
-            // 文件不在（极端情况）就先把内存 buffer 落一份，保证分享出去的一定有内容
+            // 文件不在（极端情况）就把当前会话日志落一份，保证分享出去的有内容。
+            // ⚠️ 以前这里写的是 logLines —— 日志搬到 SessionLog 之后它再没人 append，
+            //    兜底会生成一个 0 字节文件，分享出去是空的。
             if (!logFile().isFile()) {
-                synchronized (logLines) {
-                    appendLogFile(join(logLines));
-                }
+                sessionLog().dumpToFile();
             }
             Intent i = new Intent(Intent.ACTION_SEND);
             i.setType("text/plain");
@@ -1956,13 +2064,63 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode != 1001) return;
+        boolean bluetoothDenied = false;
         for (int i = 0; i < permissions.length; i++) {
             boolean ok = i < grantResults.length
                     && grantResults[i] == android.content.pm.PackageManager.PERMISSION_GRANTED;
             log((ok ? "✓ 已授权 " : "✗ 被拒绝 ") + permissions[i].replace("android.permission.", ""));
+            if (!ok && permissions[i] != null && permissions[i].contains("BLUETOOTH")) {
+                bluetoothDenied = true;
+            }
+        }
+        if (bluetoothDenied) {
+            // ⚠️ 以前被拒只写一行日志：之后自动连接会盲试 4 轮，界面只显示「失败」，
+            //    用户根本不知道自己该去开权限。
+            boolean canAskAgain = true;
+            try {
+                String perm = android.os.Build.VERSION.SDK_INT >= 31
+                        ? android.Manifest.permission.BLUETOOTH_CONNECT
+                        : android.Manifest.permission.ACCESS_FINE_LOCATION;
+                canAskAgain = shouldShowRequestPermissionRationale(perm);
+            } catch (Throwable tDiag) {
+                com.carbridge.carplay.util.Diag.w("MainActivity.permRationale", tDiag);
+            }
+            String msg = canAskAgain
+                    ? "蓝牙权限被拒绝：车机发现不了本机。请再点一次「连接」并允许「附近的设备」。"
+                    : "蓝牙权限已被永久拒绝：请到「系统设置 → 应用 → 本应用 → 权限」里打开"
+                            + "「附近的设备 / 蓝牙」，再回到本 App。";
+            log("⚠ " + msg);
+            toastShort(msg);
+            if (!canAskAgain) showPermissionSettingsDialog(msg);
         }
         // BLUETOOTH_CONNECT 刚拿到时 onCreate 那次注册会失败，这里补一次
         startCarPlayBeacon();
+    }
+
+    /** 权限被永久拒绝时给一个直达设置的入口（否则用户只能自己找）。 */
+    private void showPermissionSettingsDialog(String msg) {
+        if (destroyed || isFinishing()) return;
+        try {
+            new AlertDialog.Builder(this)
+                    .setTitle(R.string.perm_needed_title)
+                    .setMessage(msg)
+                    .setPositiveButton(R.string.perm_go_settings, new DialogInterface.OnClickListener() {
+                        @Override
+                        public void onClick(DialogInterface d, int which) {
+                            try {
+                                startActivity(new Intent(
+                                        android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                        android.net.Uri.parse("package:" + getPackageName())));
+                            } catch (Throwable tDiag) {
+                                com.carbridge.carplay.util.Diag.w("MainActivity.permSettings", tDiag);
+                            }
+                        }
+                    })
+                    .setNegativeButton(R.string.cancel, null)
+                    .show();
+        } catch (Throwable tDiag) {
+            com.carbridge.carplay.util.Diag.w("MainActivity.permDialog", tDiag);
+        }
     }
         /**
      * 挂上 CarPlay 的 SDP 信标。
@@ -2854,16 +3012,26 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         keepBeaconAlive("打开 App");
         refreshIdentity();
         kickIdentityProbe();
+        // 从系统设置补完蓝牙权限再回来时，配对监听可能还没注册（它原来只在
+        // startCarPlayBeacon 里注册）。registerBondWatcher 自身幂等，重复调无副作用。
+        registerBondWatcher();
     }
 
     @Override
     protected void onDestroy() {
+        // ⚠️ 顺序很重要：先钉「已销毁」并把主线程队列清空，再拆会话，最后 super。
+        //    以前只清 bondPoll，main 里排队的自动连接/重连（最长 30s）会在已销毁的
+        //    Activity 上继续跑：new HuClient + startForegroundService + client.start()
+        //    → 无界面的幽灵会话；Android 12+ 后台起前台服务还会直接抛异常崩主线程。
+        destroyed = true;
         bondPolling = false;
         bondPoll.removeCallbacksAndMessages(null);
+        main.removeCallbacksAndMessages(null);
+        reconnectRunnable = null;
+        autoConnectOnce = null;
         if (sAlive == this) {
             sAlive = null;
         }
-        super.onDestroy();
         if (client != null) {
             client.stop();
         }
@@ -2884,5 +3052,6 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         }
         // 关掉日志文件句柄：Activity 每重建一次就漏一个 fd
         closeLogFile();
+        super.onDestroy();
     }
 }

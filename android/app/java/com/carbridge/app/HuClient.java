@@ -1893,7 +1893,12 @@ public final class HuClient {
             while (running && gen == mediaGen) {
                 Socket s = socks.get(2);
                 if (s == null) {
-                    log("音频通道不存在");
+                    // ⚠️ 不能裸 return：线程退出后 audioReading 会被复位，而
+                    //    startAudioReader() 只在「开始推流」那一步调用一次 → 没人再起线程，
+                    //    9240 不再被读，接收缓冲填满反压 Car+ 写线程。画面正常、车机永久无声。
+                    log("音频通道不存在 → 判链路故障并重建会话");
+                    markFault(Fault.EOF);
+                    closeAll();
                     return;
                 }
                 byte[] head = readN(s, 12);
@@ -1911,7 +1916,10 @@ public final class HuClient {
                 int ts = HuProto.mediaTimestamp(head);
                 int service = HuProto.mediaService(head);
                 if (len < 0 || len > 1024 * 1024) {
-                    log("音频包长度非法 " + len + "，停止音频读取");
+                    // 长度非法意味着这条流已经错位，继续读只会读出垃圾
+                    log("音频包长度非法 " + len + " → 判链路故障并重建会话");
+                    markFault(Fault.SILENT);
+                    closeAll();
                     return;
                 }
                 byte[] payload = len == 0 ? new byte[0] : readN(s, len);
@@ -1929,6 +1937,14 @@ public final class HuClient {
                     log("← MEDIA_INIT 音频格式 " + (fmt != null
                             ? fmt[0] + "Hz/" + fmt[1] + "ch/" + fmt[2] + "bit"
                             : "解析失败 " + HuProto.hex(payload, 16)));
+                    // ⚠️ 下游按 44.1k/立体声/16bit 封包（SETUP 里也是这么报的）。
+                    //    源若不是这个格式，会被整体变速/变调或下混错误 —— 至少要在日志里
+                    //    说清楚，而不是只打印「收到 48000Hz」让人自己去推。
+                    if (fmt != null && (fmt[0] != 44100 || fmt[1] != 2 || fmt[2] != 16)) {
+                        log("⚠ 源音频格式与下游封装不一致（" + fmt[0] + "Hz/" + fmt[1]
+                                + "ch/" + fmt[2] + "bit vs 44100/2/16）：可能变速/变调，"
+                                + "需重采样才能彻底修好（当前未做）");
+                    }
                     continue;
                 }
                 if (service != HuProto.MD_MEDIA_DATA) {

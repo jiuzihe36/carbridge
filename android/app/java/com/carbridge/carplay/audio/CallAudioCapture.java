@@ -34,7 +34,8 @@ public final class CallAudioCapture {
 
     private Thread thread;
     private volatile boolean running;
-    private AudioRecord record;
+    /** ⚠️ volatile：读线程每轮解引用它，stop() 在别的线程置空/停止。 */
+    private volatile AudioRecord record;
     private final Sink sink;
     private final Log log;
     private long samples;
@@ -48,52 +49,76 @@ public final class CallAudioCapture {
         this.log = log;
     }
 
-    /** 开始采集。已经跑着就直接返回。 */
-    public synchronized void start(Context ctx) {
-        if (running) return;
+    /**
+     * 开始采集。
+     *
+     * @return true = 真的采起来了；false = 没采起来（权限/格式/占用）
+     *
+     * <p>⚠️ 必须返回结果：以前是 void，调用方不管成败都压掉本机通话音量并
+     * 「认为已在路由」，HFP 备选就永远轮不到 —— 该通电话车机没声、手机也可能没声。
+     */
+    public synchronized boolean start(Context ctx) {
+        if (running) return true;
         final int minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE,
                 AudioFormat.CHANNEL_IN_STEREO, AudioFormat.ENCODING_PCM_16BIT);
         if (minBuf <= 0) {
-            log.onLog("通话采集：AudioRecord 不支持 44.1k 立体声（minBuf=" + minBuf + "）");
-            return;
+            log.onLog("⚠ 通话采集：AudioRecord 不支持 44.1k 立体声（minBuf=" + minBuf + "）");
+            return false;
         }
         final int bufSize = Math.max(minBuf, SAMPLE_RATE * 4 * FRAME_MS / 1000 * 4);
         try {
             record = buildRecord(bufSize);
             if (record == null || record.getState() != AudioRecord.STATE_INITIALIZED) {
-                log.onLog("通话采集：AudioRecord 初始化失败（可能没有 RECORD_AUDIO 权限）");
+                log.onLog("⚠ 通话采集：AudioRecord 初始化失败（可能没有 RECORD_AUDIO 权限）");
                 release();
-                return;
+                return false;
             }
             record.startRecording();
+            if (record.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) {
+                log.onLog("⚠ 通话采集：startRecording 后状态不是 RECORDING（"
+                        + record.getRecordingState() + "）");
+                release();
+                return false;
+            }
         } catch (Throwable t) {
-            log.onLog("通话采集：启动失败 " + t);
+            log.onLog("⚠ 通话采集：启动失败 " + t);
             release();
-            return;
+            return false;
         }
         running = true;
         samples = 0;
+        final AudioRecord rec = record;
         final int frameBytes = SAMPLE_RATE * 4 * FRAME_MS / 1000;
         thread = new Thread(new Runnable() {
             @Override public void run() {
                 byte[] buf = new byte[frameBytes];
                 long t0 = System.currentTimeMillis();
                 log.onLog("通话采集：已开始（44.1k/16bit/立体声，20ms 一帧）");
-                while (running) {
-                    int n = record.read(buf, 0, buf.length);
-                    if (n > 0) {
-                        samples += n / 4;
-                        sink.onPcm(buf, n, Math.max(0L, System.currentTimeMillis() - t0));
-                    } else if (n < 0) {
-                        log.onLog("通话采集：read 返回 " + n + "（停止采集）");
-                        break;
+                try {
+                    while (running && rec != null) {
+                        int n = rec.read(buf, 0, buf.length);
+                        if (n > 0) {
+                            samples += n / 4;
+                            sink.onPcm(buf, n, Math.max(0L, System.currentTimeMillis() - t0));
+                        } else if (n < 0) {
+                            log.onLog("通话采集：read 返回 " + n + "（停止采集）");
+                            break;
+                        }
                     }
+                } catch (Throwable t) {
+                    // 以前异常直接逃出 run()：running 永远停在 true，
+                    // 下一次 start() 因 if (running) 直接跳过 → 后续通话永久采不到音。
+                    log.onLog("通话采集：读取异常，停止：" + t);
+                } finally {
+                    running = false;
+                    releaseIfCurrent(rec);
+                    log.onLog("通话采集：已停止，共 " + samples + " 帧");
                 }
-                log.onLog("通话采集：已停止，共 " + samples + " 帧");
             }
         }, "carbridge-call-audio");
         thread.setDaemon(true);
         thread.start();
+        return true;
     }
 
     /** 优先 VOICE_COMMUNICATION（通话语音优化），不行再退 MIC。 */
@@ -125,13 +150,26 @@ public final class CallAudioCapture {
     }
 
     /** 停止采集（通话结束/会话断开都要调）。 */
-    public synchronized void stop() {
+    public void stop() {
         running = false;
-        Thread t = thread;
-        thread = null;
-        if (t != null) {
-            try { t.join(500); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+        // 先打断阻塞中的 read：只置标志位的话它会一直等到下一次数据/超时
+        AudioRecord r = record;
+        if (r != null) {
+            try {
+                r.stop();
+            } catch (Throwable tDiag) {
+                com.carbridge.carplay.util.Diag.w("CallAudioCapture.stop", tDiag);
+            }
         }
+        Thread t = thread;
+        if (t != null && t != Thread.currentThread()) {
+            try {
+                t.join(2000);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        // 读线程没能在 2 秒内退出（极端情况）也要把设备放掉，不能只等它
         release();
     }
 
@@ -139,15 +177,22 @@ public final class CallAudioCapture {
         return running;
     }
 
-    private void release() {
+    /** 释放 AudioRecord（幂等）。 */
+    private synchronized void release() {
+        AudioRecord r = record;
+        record = null;
+        if (r == null) return;
         try {
-            if (record != null) {
-                if (record.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) record.stop();
-                record.release();
-            }
+            if (r.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) r.stop();
+            r.release();
         } catch (Throwable t) {
             com.carbridge.carplay.util.Diag.w("CallAudioCapture.release", t);
         }
-        record = null;
+    }
+
+    /** 读线程退出时释放「自己那一份」：新会话已经换了设备就不要误放。 */
+    private synchronized void releaseIfCurrent(AudioRecord r) {
+        if (record != r) return;
+        release();
     }
 }

@@ -263,6 +263,13 @@ public final class CarAudioRouter {
     /** HFP profile 就绪 → 连上车机 → 设为通话设备 → 静音本机铃声。 */
     private static void onHeadsetReady(final Context ctx, final BluetoothDevice car,
                                         BluetoothProfile profile, final Log log, int gen) {
+        // 旧一轮的代理回调迟到时不能把旧 proxy 写回去：那会让 headsetPending 归零、
+        // waitForHeadset(旧 gen) 立即返回，出现「HFP 显示连上了却没设通话设备/没静音」。
+        if (gen != headsetWaitGen) {
+            emit(log, "通话音频：收到过期的 HFP 代理回调（gen=" + gen
+                    + "，当前 " + headsetWaitGen + "）→ 忽略");
+            return;
+        }
         if (!(profile instanceof BluetoothHeadset)) return;
         final BluetoothHeadset hs = (BluetoothHeadset) profile;
         headsetProxy = hs;

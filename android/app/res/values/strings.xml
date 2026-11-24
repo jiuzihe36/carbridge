@@ -181,4 +181,8 @@
     <string name="help_export_diag">导出诊断包（日志+身份+配置）</string>
     <string name="help_autoreconnect">自动重连</string>
     <string name="verbose_trace_title">详细协议日志</string>
+    <!-- 权限被永久拒绝时的提示（蓝牙/附近设备） -->
+    <string name="perm_needed_title">需要蓝牙权限</string>
+    <string name="perm_go_settings">去设置</string>
+    <string name="cancel">取消</string>
 </resources>

@@ -1591,7 +1591,14 @@ public final class AirPlaySession {
     }
 
     /** 提交**通话声**（audioType=telephony 的那条流）。 */
-    public void submitTelephonyAudio(byte[] pcm, long ptsMs) {
+    /**
+     * 送一段通话 PCM。
+     *
+     * <p>⚠️ synchronized：telephony 流有**两个生产者** —— HuClient 在通话中把 9240 的
+     * MEDIA 直接转进来，CallAudioCapture 的采集线程也往里送。accumulator 与 RTP 时间戳
+     * 的自增都是非原子复合操作，不加锁会字节交错 → 车机听到断续噪音/回声。
+     */
+    public synchronized void submitTelephonyAudio(byte[] pcm, long ptsMs) {
         if (state != State.STREAMING) return;
         if (telephonySocket == null || telephonyAddr == null || telephonyPort <= 0
                 || telephonyPacker == null || pcm == null || pcm.length == 0) {

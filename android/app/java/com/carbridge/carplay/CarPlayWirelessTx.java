@@ -1102,8 +1102,14 @@ public final class CarPlayWirelessTx {
                     });
         }
         log("通话音频：走 AirPlay telephony 流（真 iPhone 的方式）");
-        callCapture.start(ctx);
-        // 系统仍然会把通话声从听筒放出来，一并压掉，否则「车机和手机同时出声」
+        if (!callCapture.start(ctx)) {
+            // ⚠️ 采不起来（没权限/格式不支持/被占用）就不要压本机通话音量、也不要
+            //    谎报已路由 —— 返回 false 让调用方回落到 HFP，否则这通电话两头都可能没声。
+            log("⚠ 通话采集没起来（权限/格式/占用）→ 本通电话改用 HFP 备选");
+            return false;
+        }
+        // 系统仍然会把通话声从听筒放出来，一并压掉，否则「车机和手机同时出声」。
+        // 只在采集真的成功后才压：失败时压掉就没人能出声了。
         com.carbridge.carplay.audio.CarAudioRouter.setVoiceCallMuted(ctx, true, audioLog());
         return true;
     }
