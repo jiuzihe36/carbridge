@@ -95,6 +95,10 @@ public final class HuClient {
     private final Sink sink;
 
     private volatile boolean running;
+    /** 会话代际：每次 start()/stop() 自增，旧线程看到代际变了就立刻收手。 */
+    private volatile int sessionGen;
+    /** 当前会话线程（stop 时 interrupt + 短暂 join）。 */
+    private volatile Thread sessionThread;
     private volatile State state = State.IDLE;
     private volatile int width = 1920, height = 720, fps = 30;
     /**
@@ -591,17 +595,35 @@ public final class HuClient {
             prev.stop();
         }
         running = true;
-        new Thread(new Runnable() {
+        final int gen = ++sessionGen;
+        Thread t = new Thread(new Runnable() {
             @Override
             public void run() {
-                session();
+                session(gen);
             }
-        }, "hu-session").start();
+        }, "hu-session");
+        sessionThread = t;
+        t.start();
     }
 
     public synchronized void stop() {
         ACTIVE.compareAndSet(this, null);
         running = false;
+        // ⚠️ 让会话线程立刻换代退出：以前只置 running=false，旧线程还在
+        // waitForPorts 的盲等里睡着（最长 8 秒），醒来后照样把 6 条 socket 连上；
+        // 这批 socket 建在 closeAll 之后、没人关，一直占着 Car+ 的通道槽位，
+        // 用户「断开 → 立刻重连」就会撞 resetConnectManager → 连环断流。
+        sessionGen++;
+        Thread t = sessionThread;
+        sessionThread = null;
+        if (t != null) {
+            t.interrupt();
+            try {
+                t.join(300);          // 给它一点时间退出；超时也不阻塞 UI
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            }
+        }
         videoReading = false;
         audioReading = false;
         hbGen++;
@@ -629,7 +651,7 @@ public final class HuClient {
         }
     }
 
-    private void session() {
+    private void session(int gen) {
         // 每个周期只拉起 Car+ 一次。
         //
         // 以前的条件是 `firstFrameAt == 0`（=「本周期还没出过画面」），结果每一轮失败都会
@@ -641,7 +663,7 @@ public final class HuClient {
         boolean needLaunch = true;
         // ⚠️ 不能写死 attempt<=5：锁屏/网络抖动一次就耗尽配额，然后永久放弃
         // （现象就是「锁屏后失去连接，再也不会自己回来」）。running 期间一直重试。
-        for (int attempt = 1; running; attempt++) {
+        for (int attempt = 1; running && gen == sessionGen; attempt++) {
             // 每次尝试单独计时：否则重连几轮之后，「首帧延迟」会把重连耗时也算进去
             // （现场看到 2-3s 变成 10s+，其实真实首帧仍是几秒）。
             startedAt = System.currentTimeMillis();
@@ -704,7 +726,7 @@ public final class HuClient {
                 launchCarlifeChannel(true);
                 needLaunch = false;
             }
-            if (!openAllChannels()) {
+            if (!openAllChannels(gen)) {
                 portFails++;
                 if (portFails >= 3) {
                     // 连续 3 轮等不到端口 = Car+ 的 CarLife 服务卡死了。
@@ -931,24 +953,30 @@ public final class HuClient {
     }
 
     /** 等手机开端口 → 一次性把 6 条通道全连上。 */
-    private boolean openAllChannels() {
+    private boolean openAllChannels(int gen) {
         setState(State.WAITING_PORT, "等待 Car+ 打开通道");
         enterStep(Step.WAITING_CHANNEL);
-        int[] ports = waitForPorts();
+        int[] ports = waitForPorts(gen);
         if (ports == null) {
-            sink.onStepFailed(Step.WAITING_CHANNEL, "等不到 Car+ 打开端口");
+            // 用户已经点了断开时不要报「失败」：那不是失败，是被取消
+            if (running && gen == sessionGen) {
+                sink.onStepFailed(Step.WAITING_CHANNEL, "等不到 Car+ 打开端口");
+            }
             return false;
         }
+        if (!running || gen != sessionGen) return false;
         activePorts = ports;
         log("手机监听端口组：" + ports[0] + "/" + ports[1] + "/" + ports[2]
                 + "/" + ports[3] + "/" + ports[4] + "/" + ports[5]);
         setState(State.CONNECTING, "连接 6 条通道");
         enterStep(Step.CONNECT_CHANNELS);
         for (int i = 0; i < HU_SLOTS; i++) {
+            if (!running || gen != sessionGen) return false;
             socks.set(i, connect(ports[i]));
             if (socks.get(i) == null) {
                 log("通道 " + i + "（" + ports[i] + "）连不上，重试一次");
                 sleep(400);
+                if (!running || gen != sessionGen) return false;
                 socks.set(i, connect(ports[i]));
             }
             if (socks.get(i) == null) {
@@ -967,7 +995,7 @@ public final class HuClient {
      * 端口刚打开时那台监听者还没把会话装好——立刻连会被它当成无效连接丢掉，
      * 所以发现端口后先让它稳定一下再连（实测：立刻连 = 被 reset / 全程无回应）。
      */
-    private int[] waitForPorts() {
+    private int[] waitForPorts(int gen) {
         long waitStart = System.currentTimeMillis();
         long deadline = waitStart + portWaitMs;
         boolean relaunched = false;
@@ -988,10 +1016,11 @@ public final class HuClient {
             } else {
                 log("读不到 /proc/net/tcp，按默认端口组直连");
             }
-            return HuProto.WIFI_PORTS;
+            // 盲等期间用户可能已经点了「断开」：别再往下连（连上的 socket 没人关）
+            return (running && gen == sessionGen) ? HuProto.WIFI_PORTS : null;
         }
 
-        while (running && System.currentTimeMillis() < deadline) {
+        while (running && gen == sessionGen && System.currentTimeMillis() < deadline) {
             for (int[] set : new int[][]{HuProto.WIFI_PORTS, HuProto.LOCAL_PORTS}) {
                 if (probePort(set[0])) {
                     // 只在**真的刚拉起过 Car+** 时才等，且只等这一次。
@@ -1020,6 +1049,7 @@ public final class HuClient {
                     if (w > 0) {
                         log("端口 " + set[0] + " 已打开，距上次拉起还差 " + w + "ms，等够再连");
                         sleep((int) w);
+                        if (!running || gen != sessionGen) return null;
                     } else {
                         log("端口 " + set[0] + " 已打开（距上次拉起已超过 " + settle
                                 + "ms），直接连");
@@ -1051,11 +1081,20 @@ public final class HuClient {
                 if (sinceLaunch > 3000) {
                     relaunched = true;
                     if (portResetStreak < 3) {
-                        portResetStreak++;
-                        log("距上次拉起 " + sinceLaunch + "ms 仍无任何端口，"
-                                + "判监听器已被对端拆掉（它不会自己回来），立即重置而不空等"
-                                + "（第 " + portResetStreak + " 次）");
-                        tryForceRestart("重置监听器");
+                        // ⚠️ 只有**真的执行了重置**才计数：tryForceRestart 在冷却窗口内
+                        //    会直接返回 false（什么都没做），以前按「调用即计数」，
+                        //    冷却里空喊两次就把 streak 推到 3 → 之后永久「只等」，
+                        //    而端口按注释根本不会自己回来 = 会话彻底卡死。
+                        boolean restarted = tryForceRestart("重置监听器");
+                        if (restarted) {
+                            portResetStreak++;
+                            log("距上次拉起 " + sinceLaunch + "ms 仍无任何端口，"
+                                    + "判监听器已被对端拆掉（它不会自己回来），立即重置而不空等"
+                                    + "（第 " + portResetStreak + " 次）");
+                        } else {
+                            log("距上次拉起 " + sinceLaunch + "ms 仍无任何端口，但强拉冷却中 → "
+                                    + "本轮不计数，继续等端口（冷却结束会自动再试）");
+                        }
                     } else {
                         // 连续 3 次重置都换不回监听器 → 再重置也不会更有效，
                         // 而且反复 CLEAR_TASK 会不停打断 Car+ 服务自己的重建过程。
@@ -1375,44 +1414,58 @@ public final class HuClient {
                 socks.get(0).setSoTimeout(windowMs);
             }
             while (running) {
-                byte[] head;
+                // ⚠️ 头和体必须在**同一个** try 里：
+                //    以前只包住 8 字节头，体读（长度可达 8MB）一旦超时/失败会落到外层
+                //    catch —— 头已经消费、体只读了一半，CMD 帧没有 magic，无法就地重同步；
+                //    之后就把体中间的字节当新头解，service/len 全是垃圾，
+                //    而且这些垃圾包还会刷新 lastRxAtMs，上层永远判「在对端在动」。
+                boolean headRead = false;
                 try {
-                    head = readExact(socks.get(0), 8);
+                    byte[] head = readExact(socks.get(0), 8);
+                    if (head == null) {
+                        if (running) log("控制通道被对端关闭");
+                        markFault(Fault.EOF);
+                        return answered;
+                    }
+                    headRead = true;
+                    int len = HuProto.cmdLength(head);
+                    int service = HuProto.cmdService(head);
+                    byte[] body = len > 0 ? readExact(socks.get(0), len) : new byte[0];
+                    if (body == null) {
+                        log("控制通道负载读取失败（头已消费 " + len + "B）→ 流已错位，重建会话");
+                        markFault(Fault.STALL);
+                        closeAll();
+                        return answered;
+                    }
+                    trace("RX", 0, service, body);
+                    lastRxAtMs = System.currentTimeMillis();
+                    answered = true;
+                    onCmd(service, body);
                 } catch (java.net.SocketTimeoutException te) {
-                    // TCP 是通的、对端只是不回 —— 不是「死」，是「这段窗内没有动静」。
-                    // 定性为 SILENT 交给上层决定要不要继续等，**不能**当成失败去重连。
-                    markFault(Fault.SILENT);
+                    if (headRead) {
+                        // 半条帧：不能继续在这条流上解下一条，只能重建
+                        log("控制通道负载读超时（头已消费）→ 流已错位，判链路故障并重建会话");
+                        markFault(Fault.STALL);
+                        closeAll();
+                    } else {
+                        // TCP 是通的、对端只是不回 —— 不是「死」，是「这段窗内没有动静」。
+                        // 定性为 SILENT 交给上层决定要不要继续等，**不能**当成失败去重连。
+                        markFault(Fault.SILENT);
+                    }
                     return answered;
                 } catch (java.io.IOException ioe) {
-                    if (running) {
-                        log("控制通道读失败：" + ioe);
-                    }
+                    if (running) log("控制通道读失败：" + ioe);
                     markFault(classify(ioe));
+                    if (headRead) closeAll();   // 半条帧同样必须重建
                     return answered;
                 }
-                if (head == null) {
-                    if (running) {
-                        log("控制通道被对端关闭");
-                    }
-                    markFault(Fault.EOF);
-                    return answered;
-                }
-                int len = HuProto.cmdLength(head);
-                int service = HuProto.cmdService(head);
-                byte[] body = len > 0 ? readExact(socks.get(0), len) : new byte[0];
-                if (body == null) {
-                    log("控制通道负载读取失败");
-                    return answered;
-                }
-                trace("RX", 0, service, body);
-                lastRxAtMs = System.currentTimeMillis();
-                answered = true;
-                onCmd(service, body);
             }
         } catch (Throwable t) {
             if (running) {
-                log("控制通道异常：" + t);
+                log("控制通道异常：" + t + " → 判链路故障并重建会话");
             }
+            markFault(Fault.SILENT);
+            closeAll();
         }
         return answered;
     }
@@ -1889,8 +1942,15 @@ public final class HuClient {
                 }
             }
         } catch (Throwable t) {
-            if (running) {
-                log("音频通道异常：" + t);
+            if (running && gen == mediaGen) {
+                // 和视频通道同一套处理：异常退出后 audioReading 会被 finally 复位，
+                // 而 startAudioReader() 只由「开始推流」那一步调用 → 没人再起线程。
+                // 结果是画面正常、车机永久无声，还会反压 Car+ 的发送线程。
+                log("音频通道异常：" + t + " → 判链路故障并重建会话");
+                markFault(Fault.EOF);
+                closeAll();
+            } else if (running) {
+                log("音频通道异常（旧会话，忽略）：" + t);
             }
         }
     }
@@ -2347,6 +2407,10 @@ public final class HuClient {
     }
 
     private void setState(State s, String detail) {
+        // ⚠️ 已经停止/断开之后，旧会话线程仍可能在收尾时调 setState(HANDSHAKING/STREAMING)：
+        //    以前会把界面从「已断开」拉回「正在投屏」，用户以为连接还活着。
+        //    CLOSED 本身要放行（stop() 就是在 running=false 之后写的）。
+        if (s != State.CLOSED && !running) return;
         state = s;
         sink.onState(s, detail);
     }

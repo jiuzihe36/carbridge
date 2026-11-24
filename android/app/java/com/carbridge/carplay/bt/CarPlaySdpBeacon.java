@@ -327,7 +327,17 @@ public final class CarPlaySdpBeacon {
         SERVERS.clear();
         REGISTERED.clear();
         ACCEPT_THREADS.clear();
-        HELD.clear();
+        // ⚠️ HELD 里的 socket 必须真的关掉再清：只 clear 等于每次 revive 漏最多 4 个 fd，
+        //    而信标是 24/7 常驻、蓝牙栈抖动时会反复 revive。
+        synchronized (HELD) {
+            for (BluetoothSocket h : HELD) {
+                try {
+                    if (h != null) h.close();
+                } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("SdpBeacon", t);
+                }
+            }
+            HELD.clear();
+        }
         if (pendingIap2 != null) {
             try {
                 pendingIap2.close();
@@ -336,7 +346,9 @@ public final class CarPlaySdpBeacon {
         }
         pendingIap2 = null;
         pendingIap2At = 0L;
-        activeSessionWanted = false;
+        // 发送端还挂着的话，重挂后的记录要按「活动会话」处理（交给 sink），
+        // 不能让它们退回 hold 模式 —— 否则车机从 2d8d2466 进来会被一直挂着不应答。
+        activeSessionWanted = iap2Sink != null;
         started = false;
         startedAtMs = 0L;
     }
@@ -466,24 +478,32 @@ public final class CarPlaySdpBeacon {
         /** 把车机连接交给发送端；发送端没起来就先暂存。 */
         private void handoff(BluetoothSocket socket) {
             Iap2Sink sink = iap2Sink;
-            if (sink != null) {
-                emit(log, "CarPlay iAP2: 车机从 " + uuid + " 连上来了，交给发送端");
-                sink.onIap2Socket(socket);
-                return;
-            }
-            synchronized (CarPlaySdpBeacon.class) {
-                // 车机在发送端没起来时可能连多次：只留最新的一个，
-                // 旧的必须关掉，否则 fd 泄漏 + 车机以为会话还活着。
-                if (pendingIap2 != null) {
-                    try {
-                        pendingIap2.close();
-                    } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("SdpBeacon", t);
+            if (sink == null) {
+                // ⚠️ 必须在同一把锁里**再读一次** iap2Sink：
+                //    车机连接可能正好落在 attachIap2Sink() 与这里之间 ——
+                //    attach 先看到 pending==null 返回，这里再按旧的 null 去暂存，
+                //    socket 就永远躺在 pendingIap2 里没人查（车机「连上了但 iAP2 毫无反应」）。
+                synchronized (CarPlaySdpBeacon.class) {
+                    sink = iap2Sink;
+                    if (sink == null) {
+                        // 车机在发送端没起来时可能连多次：只留最新的一个，
+                        // 旧的必须关掉，否则 fd 泄漏 + 车机以为会话还活着。
+                        if (pendingIap2 != null) {
+                            try {
+                                pendingIap2.close();
+                            } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("SdpBeacon", t);
+                            }
+                        }
+                        pendingIap2 = socket;
+                        pendingIap2At = System.currentTimeMillis();
+                        emit(log, "CarPlay iAP2: 车机已从 " + uuid + " 连上"
+                                + "（发送端还没起来，先存着）");
+                        return;
                     }
                 }
-                pendingIap2 = socket;
-                pendingIap2At = System.currentTimeMillis();
             }
-            emit(log, "CarPlay iAP2: 车机已从 " + uuid + " 连上（发送端还没起来，先存着）");
+            emit(log, "CarPlay iAP2: 车机从 " + uuid + " 连上来了，交给发送端");
+            sink.onIap2Socket(socket);
         }
 
         /** 只挂住，不做任何应答（空闲时的 SDP 探测）。 */

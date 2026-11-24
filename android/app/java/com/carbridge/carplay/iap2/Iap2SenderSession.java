@@ -95,10 +95,16 @@ public final class Iap2SenderSession {
     /** 车机自报的序列号（目标车机 = "0000000000000"）。 */
     private String carSerial;
 
-    private State state = State.IDLE;
-    private int challengeIndex = -1;
-    private boolean challengeSent;
-    private long challengeSentAtMs;
+    /**
+     * 会话状态。⚠️ volatile 不是装饰：写方是 iAP2 读线程 / 定时器线程，
+     * 读方是主线程看门狗（wifiTimeout、challengeWatchdog），JMM 下不加会读到旧值 ——
+     * 现场表现就是「看着门狗时它以为还在 AUTHENTICATING，漏发 0x4300」。
+     */
+    private volatile State state = State.IDLE;
+    /** 挑战档位与「已发出」标志：同样跨线程读写（authTimer → 主线程看门狗）。 */
+    private volatile int challengeIndex = -1;
+    private volatile boolean challengeSent;
+    private volatile long challengeSentAtMs;
     private int rejectedChallengeLevel = -1;  // 记住被拒的档位，本进程内跳过
     /**
      * 是否验证车机 MFi 签名（严格模式）。

@@ -146,6 +146,17 @@ public final class AirPlaySession {
      */
     private final Object videoSendLock = new Object();
     /**
+     * 当前这次视频写开始的时间（0 = 没在写）。
+     *
+     * <p>为什么要记：Java 的 socket 写没有超时。车机不读（解码卡住 / Wi-Fi 断一段但
+     * TCP 没 RST）时 {@code out.write} 会永久阻塞，而它持有 {@link #videoSendLock} ——
+     * 下一秒心跳线程要发 keepalive 也会卡在锁上，/feedback 停发，看起来像「还在推流」。
+     * 看门狗据此把视频通道关掉，让阻塞的写抛异常走既有的重连分支。
+     */
+    private volatile long videoWriteStartMs;
+    /** 最近一次视频通道写完的时刻（诊断用）。 */
+    private volatile long lastVideoPacketAtMs;
+    /**
      * 新流先等一个 IDR 关键帧再开始推。
      *
      * <p>Car+/CarLife 的码流是连续的，车机（或假车机）中途接入时只会拿到 P 帧
@@ -286,6 +297,9 @@ public final class AirPlaySession {
 
     public synchronized void start() {
         if (running) return;
+        // 同实例复用：CLOSED 是终态（setState 拒绝从 CLOSED 再变），
+        // 不重置就会「日志说已建立、submitVideo 一行就 return」。
+        state = State.IDLE;
         CURRENT = this;
         running = true;
         new Thread(new Runnable() {
@@ -314,7 +328,20 @@ public final class AirPlaySession {
                     }
                     if (!running) return;
                     State s = state;
-                    if (s == State.STREAMING || s == State.ERROR || s == State.CLOSED) {
+                    if (s == State.ERROR || s == State.CLOSED) {
+                        continue;
+                    }
+                    if (s == State.STREAMING) {
+                        // 写阻塞自愈：超过 2 秒还没写完 → 车机那头不读了。
+                        // 关掉视频通道让阻塞的 write 抛异常，run()/心跳按既有分支重建会话。
+                        long ws = videoWriteStartMs;
+                        if (ws > 0 && System.currentTimeMillis() - ws > 2000) {
+                            log("⚠ 视频通道写阻塞 " + (System.currentTimeMillis() - ws)
+                                    + "ms（车机不读）→ 关闭视频通道，让会话重连");
+                            closeQuietly(videoChannel);
+                            videoOut = null;
+                            videoWriteStartMs = 0;
+                        }
                         continue;
                     }
                     long now = System.currentTimeMillis();
@@ -358,7 +385,13 @@ public final class AirPlaySession {
     public void stop() {
         if (CURRENT == this) CURRENT = null;
         running = false;
+        // ⚠️ 先把终态钉死，再去关 socket：关 socket 会立刻唤醒阻塞在 read 上的会话线程，
+        //    它的 catch 以前会无条件 setState(ERROR) —— 用户手动断开就被上报成故障，
+        //    上层收到 onAirPlayFailed 会重发 0x5702，把刚被断开的车机又拉起重连。
+        setState(State.CLOSED);
         closeQuietly(control);
+        // 同实例再 start() 时不能沿用上一轮的解密流（它绑在旧 socket 上）
+        controlPlain = null;
         closeQuietly(eventChannel);
         closeQuietly(videoChannel);
         videoOut = null;
@@ -367,7 +400,6 @@ public final class AirPlaySession {
         if (audioSocket != null) audioSocket.close();
         if (telephonySocket != null) telephonySocket.close();
         if (aacEncoder != null) { aacEncoder.stop(); aacEncoder = null; }
-        setState(State.CLOSED);
     }
 
     private void run() {
@@ -462,14 +494,24 @@ public final class AirPlaySession {
             setState(State.SETTING_UP);
 
             openScreenStream(d);
-            openAudioStream();
+            // ⚠️ 音频流建立失败不能拖死视频：车机忙/不认第二个流时 requestRaw 会抛，
+            //    以前它和 openScreenStream 平铺在同一个 try 里 → 整条会话 ERROR → 黑屏。
+            try {
+                openAudioStream();
+            } catch (Throwable ta) {
+                log("⚠ 音频流建立失败（视频继续，本会话无声）: " + ta);
+            }
 
             startKeepalives(keepAlivePort);
             setState(State.STREAMING);
             log("AirPlay 会话已建立，开始推流");
         } catch (Throwable t) {
-            log("AirPlay 会话失败: " + t);
-            setState(State.ERROR);
+            // 主动 stop() 时 socket 被关，读线程也会走到这里 —— 那不是故障，
+            // 不能把已写好的 CLOSED 终态覆盖成 ERROR（否则上层会立刻重连）。
+            if (running) {
+                log("AirPlay 会话失败: " + t);
+                setState(State.ERROR);
+            }
         }
     }
 
@@ -1427,6 +1469,16 @@ public final class AirPlaySession {
         if (pcm == null || pcm.length == 0) return;
 
         try {
+            if (audioUseAac && (aacEncoder == null || !aacEncoder.isStarted())) {
+                // 协商的是 AAC，编码器却停了（AacLcEncoder 内部异常会自行 stop()）。
+                // 以前这里会静默走 PCM 分支：同一条流里塞 PCM，车机按 AAC 解 → 噪音/静音。
+                // 正确做法是停掉本会话的音频；真要降级 PCM，必须用新 connId 重新 SETUP。
+                if (!audioBroken) {
+                    audioBroken = true;
+                    log("⚠ AAC 编码器已失效 → 本会话停止推音频（重连后才可能降级 PCM）");
+                }
+                return;
+            }
             if (audioUseAac && aacEncoder != null && aacEncoder.isStarted()) {
                 submitAac(sock, pcm);
                 return;
@@ -1745,13 +1797,38 @@ public final class AirPlaySession {
                 out = videoChannel.getOutputStream();
                 videoOut = out;
             }
-            out.write(packet);
-            out.flush();
+            videoWriteStartMs = System.currentTimeMillis();
+            try {
+                out.write(packet);
+                out.flush();
+            } finally {
+                videoWriteStartMs = 0;
+                lastVideoPacketAtMs = System.currentTimeMillis();
+            }
         }
     }
 
     // ================================================================== 事件通道
 
+
+    /** 事件消息 body 上限：真实 plist 只有几 KB，超过它一定是长度字段坏了。 */
+    private static final int MAX_EVENT_BODY = 64 * 1024;
+
+    /** 解析失败就沿用默认值（事件通道的 header 不值得为一个坏字段打断整条流）。 */
+    private static int parseIntSafe(String v, int def) {
+        try {
+            return Integer.parseInt(v);
+        } catch (Throwable t) {
+            return def;
+        }
+    }
+
+    /** 跑一个一次性后台任务（不需要返回值、不占调用线程）。 */
+    private static void fireAndForget(Runnable r) {
+        Thread t = new Thread(r, "airplay-bg");
+        t.setDaemon(true);
+        t.start();
+    }
 
     private void eventLoop(Socket s) {
         try {
@@ -1802,9 +1879,11 @@ public final class AirPlaySession {
                     }
                     headerCount++;
                     if (line.toLowerCase(Locale.US).startsWith("cseq:")) {
-                        cseq = Integer.parseInt(line.substring(5).trim());
+                        // ⚠️ 不能直接 parseInt：一条 `CSeq: abc` 就会抛 NumberFormatException
+                        // 逃出整个 while，事件线程直接死掉 —— 之后这个会话再也收不到触摸/硬键。
+                        cseq = parseIntSafe(line.substring(5).trim(), cseq);
                     } else if (line.toLowerCase(Locale.US).startsWith("content-length:")) {
-                        contentLen = Integer.parseInt(line.substring(15).trim());
+                        contentLen = parseIntSafe(line.substring(15).trim(), contentLen);
                     }
                 }
                 // ⚠️ body 必须在 **header 全部读完之后** 才读。DiPlay 的 head 顺序是
@@ -1812,6 +1891,12 @@ public final class AirPlaySession {
                 // 立刻 readN，就会把后面的 `CSeq: N\r\n`+`\r\n` 一起吃进 body，
                 // 于是 body 少读 N 字节、真实 body 的尾巴（bplist 尾部）留在流里，
                 // 粘到下一条状态行前面 → 从第二条起全部错位，触摸永远解析不出（真机实测）。
+                if (contentLen > MAX_EVENT_BODY) {
+                    // 头已消费、长度不可信 → 这条流没法再对齐，只能停掉事件通道（画面继续）
+                    log("事件通道 body 长度异常（" + contentLen + "B，上限 " + MAX_EVENT_BODY
+                            + "）→ 事件流已错位，停止事件通道（触摸/硬键本会话不可用）");
+                    break;
+                }
                 if (contentLen > 0) {
                     if (detail) {
                         log("事件循环: header 读完（" + headerCount + " 行），读 body len=" + contentLen);
@@ -1867,7 +1952,17 @@ public final class AirPlaySession {
                             // 所以这里不会阻塞后续 /command 的应答。
                             handleHid(m);
                         } else if ("changeModes".equals(type)) {
-                            sendModesChanged();
+                            // ⚠️ sendModesChanged() 要走控制通道（最长 8s 超时）。
+                            //    在事件线程里同步做，会把后续触摸应答全堵住；挪到独立线程。
+                            fireAndForget(new Runnable() {
+                                @Override public void run() {
+                                    try {
+                                        sendModesChanged();
+                                    } catch (java.io.IOException e) {
+                                        log("changeModes 回发失败: " + e);
+                                    }
+                                }
+                            });
                         } else if ("forceKeyFrame".equals(type)) {
                             log("车机要求关键帧");
                         } else if ("requestUI".equals(type)) {
@@ -2127,7 +2222,10 @@ public final class AirPlaySession {
         for (int i = 0; i < 4; i++) {
             RtspMessage.Response r = readControlResponse();
             if (r == null) return null;
-            if (r.cseq < 0 || r.cseq == expectedCseq) return r;
+            if (r.cseq == expectedCseq) return r;
+            // ⚠️ 不能放行 cseq<0：这条是**控制通道**，每条响应都该带 CSeq。
+            //    放行等于把上一条请求的残留（半行 `CSeq: N` 会被解析成 status=5/cseq=-1）
+            //    当成这次的响应交出去 —— 调用方拿到空 body，/feedback 还会把失败当成功。
             log("⚠ 丢弃错位响应（cseq=" + r.cseq + "，期望 " + expectedCseq + "）：" + what);
         }
         throw new IOException("控制通道响应持续错位（CSeq 连续不匹配）：" + what);

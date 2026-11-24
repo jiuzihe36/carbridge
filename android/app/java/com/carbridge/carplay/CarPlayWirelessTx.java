@@ -112,22 +112,23 @@ public final class CarPlayWirelessTx {
      * 拿别人的 EIR 去连热点 = 连到 rogue AP。所以按地址存，用的时候只取车机地址那条。
      */
     private final java.util.Map<String, AppleDeviceIe> eirByAddr =
-            new java.util.HashMap<String, AppleDeviceIe>();
+            new java.util.concurrent.ConcurrentHashMap<String, AppleDeviceIe>();
     /** 车机地址（RFCOMM 对端 / 已配对设备），用来挑出车机那一份 EIR。 */
-    private String carBtAddress;
+    private volatile String carBtAddress;
     /** 车机 EIR 里的热点信息（按地址挑出来的那份）。 */
     private AppleDeviceIe eirAp;
     /** 最近一次收到的热点凭据（0x5703）。 */
-    private Iap2SenderSession.WifiConfig pendingWifi;
+    private volatile Iap2SenderSession.WifiConfig pendingWifi;
     /** 入网重试次数。 */
     private int wifiRetry;
     /** 实际连上的 AP 的 BSSID。 */
     private String joinedBssid;
     /** 入网准备（mDNS 广播/发现）是否已执行过；重复回调不再重置状态。 */
-    private boolean networkPrepared;
+    private volatile boolean networkPrepared;
     /** AirPlay 会话是否已建立（0x4301 端点拿到 → true；会话失败/结束时 false）。
-     *  用它守护所有"延迟入网 / 重复凭据 / 重复入网回调"，避免把已经建立的会话降级。 */
-    private boolean airplaySessionActive;
+     *  用它守护所有"延迟入网 / 重复凭据 / 重复入网回调"，避免把已经建立的会话降级。
+     *  ⚠️ 写方是网络/会话回调线程，读方是主线程看门狗 —— 必须 volatile。 */
+    private volatile boolean airplaySessionActive;
     /** mDNS 发现用的本地网段前缀（重连时复用）。 */
     private String airplayPrefix;
     /** 通话音频是否已经路由到车机（避免重复连 HFP）。 */
@@ -276,10 +277,12 @@ public final class CarPlayWirelessTx {
 
     public synchronized void stop() {
         stopCallWatcher();
+        // 退出车机模式时通话可能还在进行：不停止上行采集就等于麦克风一直被占用，
+        // 而且 setVoiceCallMuted(true) 没还原 → 用户回到手机通话仍是静音。
+        stopTelephonyUplink();
         setState(State.IDLE);
         main.removeCallbacks(wifiTimeout);
         main.removeCallbacks(wifiTimeoutFinal);
-        main.removeCallbacks(challengeWatchdog);
         main.removeCallbacks(iap2StallWatchdog);
         main.removeCallbacks(wifiJoinTask);
         main.removeCallbacks(mdnsWatchdog);
@@ -379,6 +382,9 @@ public final class CarPlayWirelessTx {
         setState(State.IAP2);
         enterStep(Step.IAP2_LINK);
         scheduleIap2StallWatchdog();
+        // 每条新链路都是一次新机会：入网重试预算属于「本轮会话」，不该跨轮累计。
+        wifiRetry = 0;
+        joinedBssid = null;
         // 车机自己连过来的 → **这就是车机蓝牙身份最可靠的来源**
         // （名字/CoD 都会变：实测车机重新配对后 CoD 变成 0x001F00，靠名字/CoD 会认错）。
         if (peerAddr != null && !peerAddr.isEmpty()) {
@@ -437,7 +443,11 @@ public final class CarPlayWirelessTx {
                                 }
                             }
                             if (s == Iap2SenderSession.State.AUTHENTICATING) {
-                                scheduleChallengeWatchdog();
+                                // 挑战超时由 Iap2SenderSession 内部定时器驱动（带 token 幂等）。
+                                // 这里以前还挂了一条 500ms 的外部看门狗 → 它一上来就
+                                // retryChallenge()，把本档 3000ms 的等待砍成 500ms：
+                                // 车机对 20B 的应答回来时 lastChallenge 已经换成 32B，验签必失败。
+                                log("MFi 挑战已发出，等车机应答（超时由会话内部回退档位）");
                             }
                             if (s == Iap2SenderSession.State.ERROR) {
                                 // 车机明确拒绝（识别/认证失败）→ 结束这一轮，等它重连
@@ -471,8 +481,21 @@ public final class CarPlayWirelessTx {
             //    现场表现就是「车机连上了但 iAP2 一点反应都没有」。
             session.setDeviceIdentity(btName(), realBtMac);
 
+            // ⚠️ 替换旧会话时必须把旧的真正关掉：它的 readLoop 醒来时 iap2 已指向新会话，
+            //    `if (iap2 == session)` 不成立 → onLinkLost 不跑 → close() 永远不执行，
+            //    每替换一次就漏一条 authTimer 线程 + 一份引擎状态。
+            //    顺序不能反：先登记新会话，再关旧的（否则旧 readLoop 的 onLinkLost 会拆掉新 socket）。
+            Iap2SenderSession prev = iap2;
             holder[0] = session;
             iap2 = session;
+            if (prev != null && prev != session) {
+                try {
+                    prev.close();
+                    log("旧的 iAP2 会话已关闭（被新会话替换）");
+                } catch (Throwable tDiag) {
+                    com.carbridge.carplay.util.Diag.w("CarPlayWirelessTx.replaceIap2", tDiag);
+                }
+            }
             session.start();
             readLoop(in, session);
         } catch (Throwable t) {
@@ -549,12 +572,6 @@ public final class CarPlayWirelessTx {
         }
     };
 
-    /** MFi 挑战没人应答 → 换下一个长度档位重发（32→20→16）。 */
-    private void scheduleChallengeWatchdog() {
-        main.removeCallbacks(challengeWatchdog);
-        main.postDelayed(challengeWatchdog, 500);
-    }
-
     /**
      * 车机连上了但 iAP2 一直没进展 → 告警。
      *
@@ -599,20 +616,6 @@ public final class CarPlayWirelessTx {
         }
     };
 
-    private final Runnable challengeWatchdog = new Runnable() {
-        @Override
-        public void run() {
-            Iap2SenderSession s = iap2;
-            if (s == null) return;
-            int wait = s.currentChallengeTimeoutMs();
-            if (wait <= 0) return;
-            if (s.state() == Iap2SenderSession.State.AUTHENTICATING) {
-                s.retryChallenge();
-                main.postDelayed(this, wait);
-            }
-        }
-    };
-
     private void readLoop(final InputStream in, final Iap2SenderSession session) {
         // 阻塞在 in.read() 上的读循环：对端不发数据就一直挂着，放池里免得每次重连新建线程
         Bg.run("wtx-iap2-read", new Runnable() {
@@ -652,7 +655,6 @@ public final class CarPlayWirelessTx {
         if (state == State.IDLE) return;
         log("车机链路断开（" + reason + "）→ 回到等待车机回连");
         main.removeCallbacks(iap2StallWatchdog);
-        main.removeCallbacks(challengeWatchdog);
         // ⚠️ 关键：链路一断，把「延迟入网 / 热点兜底 / mDNS 看门狗」全部作废。
         //    否则 0x5703 排的那个 wifiJoinTask 会在链路断开后重新触发 JOINING_WIFI，
         //    把状态机从 LISTENING_BT 拖进 DISCOVERING → mDNS 空等死循环（现场卡在「mDNS 发现」）。
@@ -684,8 +686,15 @@ public final class CarPlayWirelessTx {
         // 新一轮链路要重新走一遍「把通话音频交给车机」——
         // 否则第一轮 HFP 没连上时，后面永远不再尝试（callAudioRouted 是粘的）。
         callAudioRouted = false;
-        setState(State.LISTENING_BT);
-        enterStep(Step.BT_LISTEN);
+        // ⚠️ 车机连上无线 CarPlay 后会主动关掉蓝牙，这时的链路断开**不代表投屏结束**：
+        //    以前无条件 setState(LISTENING_BT)，把正在推流的终态改写成「等蓝牙回连」，
+        //    之后 AirPlay 真挂了也没有任何恢复路径（onAirPlaySessionFailed 用 state 判据）。
+        if (airplaySessionActive) {
+            log("车机蓝牙链路断开，但 AirPlay 会话仍在 → 保持推流状态");
+        } else {
+            setState(State.LISTENING_BT);
+            enterStep(Step.BT_LISTEN);
+        }
         main.removeCallbacks(listenerWatchdog);
         main.postDelayed(listenerWatchdog, LISTENER_CHECK_MS);
     }
@@ -724,10 +733,15 @@ public final class CarPlayWirelessTx {
                 log("AirPlay 会话已建立，跳过延迟入网任务（保持会话）");
                 return;
             }
-            // 入网只对「还在 iAP2 会话里、刚拿到 0x5703」有意义。
-            // 链路已经断了（回到 LISTENING_BT）时，这个过期任务必须放弃，
+            // 入网只对「iAP2 还活着」有意义。
+            // ⚠️ 以前要求 state == IAP2 —— 但 AirPlay 失败后状态是 DISCOVERING，
+            //    车机按 0x5702 回的 0x5703 到这里就被丢弃 → 重新入网永不执行，
+            //    只能干等 mDNS。入网与「iAP2 链路握手态」不是一回事。
+            // 链路真的断了（iap2 已清或回到 LISTENING_BT）才放弃，
             // 否则会把 LISTENING_BT 拖回 JOINING_WIFI→DISCOVERING→mDNS 空等。
-            if (state != State.IAP2) {
+            boolean joinable = state == State.IAP2 || state == State.DISCOVERING
+                    || state == State.JOINING_WIFI;
+            if (iap2 == null || !joinable) {
                 log("iAP2 会话已结束，放弃过期入网任务（保持等车机回连）");
                 return;
             }
@@ -941,8 +955,15 @@ public final class CarPlayWirelessTx {
 
     /** AirPlay 会话挂了（车机关了连接 / 心跳断了 / 密文流被打乱）。 */
     public void onAirPlaySessionFailed(String reason) {
+        boolean wasActive = airplaySessionActive;
         airplaySessionActive = false;
-        if (state != State.AIRPLAY) return;
+        // ⚠️ 不能用 state 判断「要不要恢复」：车机连上无线 CarPlay 后会关掉蓝牙，
+        //    onLinkLost 会把 state 改成 LISTENING_BT —— 那时 AirPlay 明明还在推流。
+        //    以前这里 `if (state != AIRPLAY) return;` 于是整段恢复被吞：
+        //    画面冻住、不重发 0x5702、UI 停在「蓝牙监听」，只能等车机自己开回蓝牙。
+        // 标志位与 state 不一致时（理论上不该发生）仍按旧逻辑只处理 AIRPLAY 态
+        if (!wasActive && state != State.AIRPLAY) return;
+        if (state == State.IDLE) return;   // 用户已经手动停了，别自己爬起来
         log("AirPlay 会话结束（" + reason + "）→ 回到发现阶段重找端点");
         setState(State.DISCOVERING);
         enterStep(Step.AIRPLAY_SESSION);
