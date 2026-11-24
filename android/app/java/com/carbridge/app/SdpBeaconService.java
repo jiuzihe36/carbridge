@@ -19,6 +19,7 @@ import android.os.Looper;
 import android.util.Log;
 
 import com.carbridge.carplay.bt.CarPlaySdpBeacon;
+import com.carbridge.carplay.util.Diag;
 
 /**
  * 只做一件事：把 CarPlay 的 SDP 信标常驻住。
@@ -187,7 +188,8 @@ public final class SdpBeaconService extends Service {
         if (btStateReceiver != null) {
             try {
                 unregisterReceiver(btStateReceiver);
-            } catch (Throwable ignored) {
+            } catch (Throwable tDiag) {
+                Diag.w("SdpBeaconService.onDestroy", tDiag);
             }
             btStateReceiver = null;
         }
@@ -236,12 +238,14 @@ public final class SdpBeaconService extends Service {
             byte[] bytes = (ts + "  " + line + "\n").getBytes("UTF-8");
             out = new java.io.FileOutputStream(f, true);
             out.write(bytes);
-        } catch (Throwable ignored) {
+        } catch (Throwable tDiag) {
+            Diag.w("SdpBeaconService.sessionLog", tDiag);
         } finally {
             if (out != null) {
                 try {
                     out.close();
-                } catch (Throwable ignored) {
+                } catch (Throwable tDiag) {
+                    Diag.w("SdpBeaconService.sessionLog#2", tDiag);
                 }
             }
         }

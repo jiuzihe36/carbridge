@@ -14,6 +14,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import com.carbridge.carplay.util.Diag;
 
 /**
  * 无线 CarPlay 的蓝牙 RFCOMM 传输层。
@@ -205,7 +206,8 @@ public final class BtIap2Server {
         BluetoothDevice dev = null;
         try {
             dev = socket.getRemoteDevice();
-        } catch (Throwable ignored) {
+        } catch (Throwable tDiag) {
+            Diag.w("BtIap2Server.deliver", tDiag);
         }
         String name = dev == null ? "?" : String.valueOf(dev.getName());
         String addr = dev == null ? "?" : dev.getAddress();
@@ -322,7 +324,8 @@ public final class BtIap2Server {
             if (adapter != null) {
                 try {
                     adapter.cancelDiscovery();
-                } catch (Throwable ignored) {
+                } catch (Throwable tDiag) {
+                    Diag.w("BtIap2Server.probeConnect", tDiag);
                 }
             }
             socket = car.createRfcommSocketToServiceRecord(uuid);
@@ -412,7 +415,8 @@ public final class BtIap2Server {
         if (s != null) {
             try {
                 s.close();
-            } catch (Exception ignored) {
+            } catch (Exception tDiag) {
+                Diag.w("BtIap2Server.closeQuietly", tDiag);
             }
         }
     }

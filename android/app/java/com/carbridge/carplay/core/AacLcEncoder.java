@@ -7,6 +7,7 @@ import android.media.MediaFormat;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
+import com.carbridge.carplay.util.Diag;
 
 /**
  * PCM → AAC-LC 编码器（CarPlay {@code type=102} MainHighAudio 通路）。
@@ -135,11 +136,13 @@ public final class AacLcEncoder {
         if (codec != null) {
             try {
                 codec.stop();
-            } catch (Throwable ignored) {
+            } catch (Throwable tDiag) {
+                Diag.w("AacLcEncoder.stop", tDiag);
             }
             try {
                 codec.release();
-            } catch (Throwable ignored) {
+            } catch (Throwable tDiag) {
+                Diag.w("AacLcEncoder.stop#2", tDiag);
             }
             codec = null;
         }

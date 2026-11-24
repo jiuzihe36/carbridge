@@ -83,7 +83,7 @@ public final class CallAudioCapture {
                     int n = record.read(buf, 0, buf.length);
                     if (n > 0) {
                         samples += n / 4;
-                        sink.onPcm(buf, n, System.currentTimeMillis() - t0);
+                        sink.onPcm(buf, n, Math.max(0L, System.currentTimeMillis() - t0));
                     } else if (n < 0) {
                         log.onLog("通话采集：read 返回 " + n + "（停止采集）");
                         break;

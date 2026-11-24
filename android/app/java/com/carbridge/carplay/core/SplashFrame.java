@@ -12,6 +12,7 @@ import android.view.Surface;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
+import com.carbridge.carplay.util.Diag;
 
 /**
  * 品牌开屏画面：Car+ 还没把真实画面送过来之前，
@@ -117,7 +118,7 @@ public final class SplashFrame {
             while (true) {
                 // ⚠️ 整体加超时：开屏编码在心跳线程里跑，卡住会把心跳一起拖死
                 //    （/feedback 停 → 会话被判死 → 重连循环）。2s 拿不到就放弃。
-                if (System.currentTimeMillis() - drainStart > 3000) {
+                if (Math.max(0L, System.currentTimeMillis() - drainStart) > 3000) {
                     android.util.Log.w("carbridge", "开屏编码超时，放弃");
                     return null;
                 }
@@ -173,11 +174,13 @@ public final class SplashFrame {
             if (codec != null) {
                 try {
                     codec.stop();
-                } catch (Throwable ignored) {
+                } catch (Throwable tDiag) {
+                    Diag.w("SplashFrame.generate", tDiag);
                 }
                 try {
                     codec.release();
-                } catch (Throwable ignored) {
+                } catch (Throwable tDiag) {
+                    Diag.w("SplashFrame.generate#2", tDiag);
                 }
             }
         }

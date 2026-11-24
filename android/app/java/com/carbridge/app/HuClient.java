@@ -18,6 +18,7 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import com.carbridge.carplay.util.Diag;
 
 /**
  * CarLife 车机侧（HU）会话：冒充车机接住 OPPO Car+。
@@ -1126,7 +1127,7 @@ public final class HuClient {
         } catch (Throwable t) {
             return null;
         } finally {
-            if (in != null) try { in.close(); } catch (Throwable ignored) { }
+            if (in != null) try { in.close(); } catch (Throwable tDiag) { Diag.w("HuClient.readFileQuietly", tDiag); }
         }
     }
 
@@ -1154,14 +1155,14 @@ public final class HuClient {
                     int n;
                     try {
                         while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
-                    } catch (Throwable ignored) { }
+                    } catch (Throwable tDiag) { Diag.w("HuClient.run", tDiag); }
                 }
             }, "proc-net-root");
             reader.setDaemon(true);
             reader.start();
             boolean done = p.waitFor(1500, java.util.concurrent.TimeUnit.MILLISECONDS);
             if (!done) {
-                try { p.destroy(); } catch (Throwable ignored) { }
+                try { p.destroy(); } catch (Throwable tDiag) { Diag.w("HuClient.readViaRoot", tDiag); }
                 if (rootCatState == 0) log("root 读 /proc/net/tcp 超时 → 本机退化为盲等端口");
                 rootCatState = -1;
                 return null;
@@ -1188,7 +1189,7 @@ public final class HuClient {
             rootCatState = -1;
             return null;
         } finally {
-            if (p != null) try { p.destroy(); } catch (Throwable ignored) { }
+            if (p != null) try { p.destroy(); } catch (Throwable tDiag) { Diag.w("HuClient.readViaRoot#2", tDiag); }
         }
     }
 

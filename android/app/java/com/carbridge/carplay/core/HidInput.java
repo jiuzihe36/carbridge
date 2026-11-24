@@ -53,21 +53,35 @@ public final class HidInput {
      *
      * @param logicalMaxX X 的逻辑上限（HID 描述符 logical maximum）
      * @param logicalMaxY Y 的逻辑上限——**与 X 可能不同**（奥迪 MIB3：1412 / 654）
+     * @param reportId    描述符声明的 Report ID；报告首字节等于它时先剥掉一个字节。
+     *                    传 0（或首字节不匹配）就按无 ID 处理。
      */
-    public static Touch parseTouch(byte[] report, int logicalMaxX, int logicalMaxY) {
-        if (report == null || report.length < 5) {
-            throw new IllegalArgumentException("触摸报告至少 5 字节，实际 "
-                    + (report == null ? 0 : report.length));
+    public static Touch parseTouch(byte[] report, int logicalMaxX, int logicalMaxY, int reportId) {
+        if (report == null) {
+            throw new IllegalArgumentException("触摸报告为空");
+        }
+        // 声明了 Report ID 的设备，报告首字节是 ID，真正的数据从第 2 字节开始。
+        // 只有首字节确实等于它才剥：有些实现描述符里写了 ID，报告却不带。
+        int base = (reportId > 0 && report.length > 1 && (report[0] & 0xFF) == reportId) ? 1 : 0;
+        int len = report.length - base;
+        if (len < 5) {
+            throw new IllegalArgumentException("触摸报告至少 5 字节，实际 " + report.length
+                    + (base > 0 ? "（已剥 Report ID）" : ""));
         }
         int maxX = logicalMaxX > 0 ? logicalMaxX : DEFAULT_LOGICAL_MAX;
         int maxY = logicalMaxY > 0 ? logicalMaxY : DEFAULT_LOGICAL_MAX;
-        final boolean multiTouch = report.length >= 6 && (report.length % 6) == 0;
+        final boolean multiTouch = len >= 6 && (len % 6) == 0;
         // 多点触控：第 0 字节是触点 ID，第 1 字节 bit0 才是按下；单指：第 0 字节就是按下
-        boolean down = (report[multiTouch ? 1 : 0] & 0x01) != 0;
-        int off = multiTouch ? 2 : 1;   // X 的起始位置
+        boolean down = (report[base + (multiTouch ? 1 : 0)] & 0x01) != 0;
+        int off = base + (multiTouch ? 2 : 1);   // X 的起始位置
         int x = (report[off] & 0xFF) | ((report[off + 1] & 0xFF) << 8);
         int y = (report[off + 2] & 0xFF) | ((report[off + 3] & 0xFF) << 8);
         return new Touch(clamp01(x / (float) maxX), clamp01(y / (float) maxY), down);
+    }
+
+    /** 没有 Report ID 的触摸报告。 */
+    public static Touch parseTouch(byte[] report, int logicalMaxX, int logicalMaxY) {
+        return parseTouch(report, logicalMaxX, logicalMaxY, 0);
     }
 
     /** X/Y 共用同一逻辑上限。 */

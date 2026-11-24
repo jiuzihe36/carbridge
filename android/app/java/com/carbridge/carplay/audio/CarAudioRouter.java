@@ -16,6 +16,7 @@ import android.util.Log;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import com.carbridge.carplay.util.Diag;
 
 /**
  * 把**通话音频**交给车机。
@@ -282,7 +283,7 @@ public final class CarAudioRouter {
      */
     private static boolean isHeadsetPending() {
         return headsetPending
-                && System.currentTimeMillis() - headsetPendingSince < HEADSET_PENDING_TIMEOUT_MS;
+                && Math.max(0L, System.currentTimeMillis() - headsetPendingSince) < HEADSET_PENDING_TIMEOUT_MS;
     }
 
     /**
@@ -364,7 +365,8 @@ public final class CarAudioRouter {
             for (BluetoothDevice d : hs.getConnectedDevices()) {
                 if (d != null && d.getAddress().equalsIgnoreCase(car.getAddress())) return true;
             }
-        } catch (Throwable ignored) {
+        } catch (Throwable tDiag) {
+            Diag.w("CarAudioRouter.isConnectedTo", tDiag);
         }
         return false;
     }
@@ -612,7 +614,8 @@ public final class CarAudioRouter {
         try {
             ctx.getApplicationContext().getSharedPreferences(PREF_RING, Context.MODE_PRIVATE)
                     .edit().putInt(KEY_RING_VOLUME, v).apply();
-        } catch (Throwable ignored) {
+        } catch (Throwable tDiag) {
+            Diag.w("CarAudioRouter.saveRingVolume", tDiag);
         }
     }
 
@@ -620,7 +623,8 @@ public final class CarAudioRouter {
         try {
             ctx.getApplicationContext().getSharedPreferences(PREF_RING, Context.MODE_PRIVATE)
                     .edit().remove(KEY_RING_VOLUME).apply();
-        } catch (Throwable ignored) {
+        } catch (Throwable tDiag) {
+            Diag.w("CarAudioRouter.clearRingVolume", tDiag);
         }
     }
 

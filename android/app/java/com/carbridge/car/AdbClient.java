@@ -17,6 +17,7 @@ import java.util.Locale;
 import javax.crypto.Cipher;
 
 import android.util.Base64;
+import com.carbridge.carplay.util.Diag;
 
 /**
  * 最小 ADB 客户端：只做 CNXN / AUTH / shell，够在车机上跑 setprop 与重启 CarPlay。
@@ -151,7 +152,8 @@ final class AdbClient {
             if (p.command == A_CLSE) {
                 try {
                     send(A_CLSE, localId, p.arg0, new byte[0]);
-                } catch (Throwable ignored) {
+                } catch (Throwable tDiag) {
+                    Diag.w("AdbClient.AdbClient", tDiag);
                 }
                 return output.toString("UTF-8");
             }
@@ -186,7 +188,8 @@ final class AdbClient {
             if (p.command == A_CLSE) {
                 try {
                     send(A_CLSE, localId, p.arg0, new byte[0]);
-                } catch (Throwable ignored) {
+                } catch (Throwable tDiag) {
+                    Diag.w("AdbClient.AdbClient#2", tDiag);
                 }
                 return output.toString("UTF-8");
             }
@@ -216,7 +219,8 @@ final class AdbClient {
                 if (p.command == A_CLSE) {
                     try {
                         send(A_CLSE, localId, p.arg0, new byte[0]);
-                    } catch (Throwable ignored) {
+                    } catch (Throwable tDiag) {
+                        Diag.w("AdbClient.AdbClient#3", tDiag);
                     }
                     return output.toString("UTF-8");
                 }
@@ -236,7 +240,8 @@ final class AdbClient {
             if (p.command == A_CLSE) {
                 try {
                     send(A_CLSE, localId, p.arg0, new byte[0]);
-                } catch (Throwable ignored) {
+                } catch (Throwable tDiag) {
+                    Diag.w("AdbClient.AdbClient#4", tDiag);
                 }
                 return output.toString("UTF-8");
             }
@@ -247,7 +252,8 @@ final class AdbClient {
     void close() {
         try {
             if (socket != null) socket.close();
-        } catch (Throwable ignored) {
+        } catch (Throwable tDiag) {
+            Diag.w("AdbClient.close", tDiag);
         }
         socket = null;
         in = null;

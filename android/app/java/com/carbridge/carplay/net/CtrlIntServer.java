@@ -7,6 +7,7 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import com.carbridge.carplay.util.Diag;
 
 /**
  * 控制通道（ctrl-int）服务端 —— 车机会**反连**我们。
@@ -38,7 +39,8 @@ public final class CtrlIntServer {
     /** 距离车机上次邀请已经过去多久（毫秒）；从没邀请过返回 -1。 */
     public static long lastInviteAgeMs() {
         long t = lastInviteAtMs;
-        return t == 0 ? -1 : System.currentTimeMillis() - t;
+        // 墙钟可能被 NTP/用户改时间往回拨，负数会被界面显示成奇怪的倒计时
+        return t == 0 ? -1 : Math.max(0L, System.currentTimeMillis() - t);
     }
 
     public CtrlIntServer(Listener listener) {
@@ -72,7 +74,8 @@ public final class CtrlIntServer {
         running = false;
         try {
             if (server != null) server.close();
-        } catch (Throwable ignored) {
+        } catch (Throwable tDiag) {
+            Diag.w("CtrlIntServer.stop", tDiag);
         }
         server = null;
     }
@@ -98,7 +101,8 @@ public final class CtrlIntServer {
                     } finally {
                         try {
                             sock.close();
-                        } catch (Throwable ignored) {
+                        } catch (Throwable tDiag) {
+                            Diag.w("CtrlIntServer.run", tDiag);
                         }
                     }
                 }

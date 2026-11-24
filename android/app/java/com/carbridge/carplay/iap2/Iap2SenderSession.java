@@ -2,6 +2,7 @@ package com.carbridge.carplay.iap2;
 
 import java.util.List;
 import java.util.Locale;
+import com.carbridge.carplay.util.Diag;
 
 /**
  * iAP2 控制会话（发送端 / iPhone 角色）：识别 → MF
@@ -367,7 +368,7 @@ public final class Iap2SenderSession {
     public void start() { engine.start(); }
     public void onBytes(byte[] data) { engine.onBytes(data); }
     public void close() {
-        try { authTimer.shutdownNow(); } catch (Throwable ignored) { } engine.close(); setState(State.CLOSED); }
+        try { authTimer.shutdownNow(); } catch (Throwable tDiag) { Diag.w("Iap2SenderSession.close", tDiag); } engine.close(); setState(State.CLOSED); }
 
     // ================================================================== 链路起来后
 
@@ -386,7 +387,8 @@ public final class Iap2SenderSession {
                     }
                 }
             }, 15, java.util.concurrent.TimeUnit.SECONDS);
-        } catch (Throwable ignored) {
+        } catch (Throwable tDiag) {
+            Diag.w("Iap2SenderSession.onLinkUp", tDiag);
         }
         log("发送 StartIdentification (0x1D00)");
     }
@@ -715,7 +717,8 @@ public final class Iap2SenderSession {
                     if (challengeSent && token == challengeToken) retryChallenge();
                 }
             }, CHALLENGE_TIMEOUT_MS[idx], java.util.concurrent.TimeUnit.MILLISECONDS);
-        } catch (Throwable ignored) {
+        } catch (Throwable tDiag) {
+            Diag.w("Iap2SenderSession.sendNextChallenge", tDiag);
         }
         log("发送 MFi 挑战 " + challenge.length + "B（等待最多 " + CHALLENGE_TIMEOUT_MS[idx] + "ms）");
     }
@@ -807,7 +810,8 @@ public final class Iap2SenderSession {
                     }
                 }
             }, 12, java.util.concurrent.TimeUnit.SECONDS);
-        } catch (Throwable ignored) {
+        } catch (Throwable tDiag) {
+            Diag.w("Iap2SenderSession.onAuthResponse", tDiag);
         }
 
         // 正向能力判据：车机声明「能收 0x4300、会发 0x4301」，且完全不参与 0x57xx、

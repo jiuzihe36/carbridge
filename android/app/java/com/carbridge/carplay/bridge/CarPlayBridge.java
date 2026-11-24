@@ -248,7 +248,7 @@ public final class CarPlayBridge implements AirPlaySession.Listener {
         } else if (action == ACT_MOVE) {
             gMoveCnt++;
         } else if (action == ACT_UP) {
-            long dur = System.currentTimeMillis() - gStartMs;
+            long dur = Math.max(0L, System.currentTimeMillis() - gStartMs);
             int dx = x - gStartX;
             int dy = y - gStartY;
             // 位移 <3px 基本是点按；滑动要有明显位移，否则车机侧看不出是 swipe

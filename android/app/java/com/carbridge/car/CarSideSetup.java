@@ -16,6 +16,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import com.carbridge.carplay.util.Diag;
 
 /**
  * 车机侧「一键解锁」：手机自己连车机热点、自己 adb 进车机、把 CarPlay 后门写上。
@@ -313,7 +314,8 @@ public final class CarSideSetup {
             for (Future<?> f : futures) {
                 try {
                     f.get(3, TimeUnit.SECONDS);
-                } catch (Throwable ignored) {
+                } catch (Throwable tDiag) {
+                    Diag.w("CarSideSetup.scanSubnet", tDiag);
                 }
             }
         } finally {
@@ -347,7 +349,8 @@ public final class CarSideSetup {
         } finally {
             try {
                 s.close();
-            } catch (Throwable ignored) {
+            } catch (Throwable tDiag) {
+                Diag.w("CarSideSetup.scanOne", tDiag);
             }
         }
     }
@@ -371,7 +374,8 @@ public final class CarSideSetup {
                     }
                 }
             }
-        } catch (Throwable ignored) {
+        } catch (Throwable tDiag) {
+            Diag.w("CarSideSetup.wifiIpv4", tDiag);
         }
         return null;
     }

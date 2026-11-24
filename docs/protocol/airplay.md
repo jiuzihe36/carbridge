@@ -29,6 +29,12 @@
 证据：实车触摸生效（含锁屏场景）
 代码：android/app/java/com/carbridge/carplay/core/HidInput.java
 
+### 触摸 Report ID（描述符声明 ID 时剥报告首字节）
+状态：INFERRED
+证据：单测 10 项（带 ID 单指/多点、首字节不匹配不剥、剥后不足 5 字节报错）；本车车机描述符是否声明 Report ID 尚未确认
+代码：android/app/java/com/carbridge/carplay/core/HidInput.java、android/app/java/com/carbridge/carplay/core/HidDescriptor.java
+关闭条件：实车日志出现「触摸ReportID=N」时点一次屏幕，坐标无偏移即关闭
+
 ### 音频：媒体通道
 状态：CONFIRMED
 证据：实车有声；Car+ 抓系统混音，音乐整段透传

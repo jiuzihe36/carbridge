@@ -51,6 +51,7 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import com.carbridge.carplay.util.Diag;
 /**
  * carbridge 主界面：状态 + 画面预览 + 触摸回传 + 运行日志。
  *
@@ -1299,7 +1300,8 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         String carName = null;
         try {
             carName = car.getName();
-        } catch (Throwable ignored) {
+        } catch (Throwable tDiag) {
+            Diag.w("MainActivity.showRepairDialog", tDiag);
         }
         if (carName == null || carName.length() == 0) carName = car.getAddress();
         new AlertDialog.Builder(this)
@@ -1395,7 +1397,7 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                             return;
                         }
                         android.bluetooth.BluetoothDevice d =
-                                intent.getParcelableExtra(android.bluetooth.BluetoothDevice.EXTRA_DEVICE);
+                                com.carbridge.carplay.bt.Bt.deviceFrom(intent);
                         if (d == null) return;
                         for (android.bluetooth.BluetoothDevice x : found) {
                             if (x.getAddress() != null && x.getAddress().equals(d.getAddress())) return;
@@ -1425,11 +1427,13 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                 } finally {
                     try {
                         adapter.cancelDiscovery();
-                    } catch (Throwable ignored) {
+                    } catch (Throwable tDiag) {
+                        Diag.w("MainActivity.run", tDiag);
                     }
                     try {
                         unregisterReceiver(receiver);
-                    } catch (Throwable ignored) {
+                    } catch (Throwable tDiag) {
+                        Diag.w("MainActivity.run#2", tDiag);
                     }
                 }
                 log("③ 搜到 " + found.size() + " 个设备");
@@ -1464,12 +1468,14 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
             String name = null;
             try {
                 name = d.getName();
-            } catch (Throwable ignored) {
+            } catch (Throwable tDiag) {
+                Diag.w("MainActivity.showPairScanResult", tDiag);
             }
             String addr = "";
             try {
                 addr = d.getAddress();
-            } catch (Throwable ignored) {
+            } catch (Throwable tDiag) {
+                Diag.w("MainActivity.showPairScanResult#2", tDiag);
             }
             labels.add((isLikelyCar(d) ? "🚗 " : "") + (name == null ? "(无名)" : name)
                     + "  " + addr);
@@ -1498,12 +1504,14 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                     return true;
                 }
             }
-        } catch (Throwable ignored) {
+        } catch (Throwable tDiag) {
+            Diag.w("MainActivity.isLikelyCar", tDiag);
         }
         try {
             int cod = d.getBluetoothClass() == null ? 0 : d.getBluetoothClass().getDeviceClass();
             return ((cod >> 8) & 0x1F) == 0x04;   // 音视频大类：车载音响/免提
-        } catch (Throwable ignored) {
+        } catch (Throwable tDiag) {
+            Diag.w("MainActivity.isLikelyCar#2", tDiag);
         }
         return false;
     }
@@ -1515,7 +1523,8 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         try {
             name = device.getName();
             addr = device.getAddress();
-        } catch (Throwable ignored) {
+        } catch (Throwable tDiag) {
+            Diag.w("MainActivity.beginBond", tDiag);
         }
         log("④ 发起配对：" + (name == null ? "(无名)" : name) + " [" + addr + "]");
         try {
@@ -1696,7 +1705,7 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
     private void rotateLogFile(File f) {
         try {
             if (logFileOut != null) {
-                try { logFileOut.close(); } catch (Throwable ignored) { }
+                try { logFileOut.close(); } catch (Throwable tDiag) { Diag.w("MainActivity.rotateLogFile", tDiag); }
                 logFileOut = null;
             }
             File old = new File(f.getParentFile(), LOG_FILE_NAME + ".1");
@@ -1982,11 +1991,10 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         if (bondReceiver != null) return;
         bondReceiver = new android.content.BroadcastReceiver() {
             @Override
-            @SuppressWarnings("deprecation")   // minSdk 26：带 Class 的重载要 API 33
             public void onReceive(Context context, Intent intent) {
                 if (intent == null) return;
-                android.bluetooth.BluetoothDevice dev = intent.getParcelableExtra(
-                        android.bluetooth.BluetoothDevice.EXTRA_DEVICE);
+                android.bluetooth.BluetoothDevice dev =
+                        com.carbridge.carplay.bt.Bt.deviceFrom(intent);
                 int state = intent.getIntExtra(
                         android.bluetooth.BluetoothDevice.EXTRA_BOND_STATE, -1);
                 int prev = intent.getIntExtra(
@@ -2230,6 +2238,14 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                     : "✗ 精确闹钟权限：未允许（省电模式下看门狗可能延迟几分钟才醒），点「自启动设置」开「闹钟和提醒」");
         } catch (Throwable t) {
             log("精确闹钟权限检查失败：" + t);
+        }
+
+        // ⑥ 静默异常：以前被空 catch 吞掉的异常，这里给计数（详情在诊断包的 Diag 段）
+        String diagDump = com.carbridge.carplay.util.Diag.dump();
+        if ("(无)".equals(diagDump)) {
+            log("✓ 静默异常：无");
+        } else {
+            log("⚠ 静默异常（tag=次数，导出诊断包可看首个栈）：" + diagDump);
         }
 
         log("—— 自检结束 ——（缺项按上面提示补，或点「后台运行设置」「自启动设置」）");

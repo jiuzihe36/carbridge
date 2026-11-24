@@ -42,6 +42,7 @@ public final class SelfTests {
         wifiConfig();
         cryptoVectors();
         airPlayInfo();
+        hid();
         linkEngine();
 
         System.out.println();
@@ -776,6 +777,81 @@ public final class SelfTests {
         StepDiagnosis.Result edge = StepDiagnosis.of(new String[0], 0, 0, null, null, null, 0);
         check(edge.level == StepDiagnosis.Level.IDLE, "空数组与越界安全降级");
         check(StepDiagnosis.hintFor(null).isEmpty(), "null 标签不抛");
+    }
+
+    // ---------------------------------------------------------------- HID 触摸
+
+    private static void hid() {
+        section("HidInput / HidDescriptor（触摸 Report ID）");
+
+        // 带 Report ID 的触摸描述符：X 4095 / Y 2047 / Report ID 5
+        byte[] desc = new byte[]{
+                0x05, 0x0D,             // Usage Page (Digitizer)
+                0x09, 0x22,             // Usage (Finger)
+                (byte) 0xA1, 0x01,      // Collection (Application)
+                0x05, 0x0D,             //   Usage Page (Digitizer) — 集合内再声明，按真实描述符习惯
+                0x09, 0x30,             //   Usage (X)
+                0x15, 0x00,             //   Logical Minimum (0)
+                0x26, (byte) 0xFF, 0x0F,//   Logical Maximum (4095)
+                0x75, 0x10,             //   Report Size (16)
+                (byte) 0x95, 0x01,      //   Report Count (1)
+                (byte) 0x85, 0x05,      //   Report ID (5)
+                (byte) 0x81, 0x02,      //   Input (Data,Var,Abs)
+                0x09, 0x31,             //   Usage (Y)
+                0x26, (byte) 0xFF, 0x07,//   Logical Maximum (2047)
+                (byte) 0x81, 0x02,      //   Input
+                (byte) 0xC0             // End Collection
+        };
+        int[] ax = com.carbridge.carplay.core.HidDescriptor.touchAxisMaxima(desc);
+        check(ax != null && ax[0] == 4095 && ax[1] == 2047, "触摸轴上限 4095×2047");
+        check(com.carbridge.carplay.core.HidDescriptor.touchReportId(desc) == 5,
+                "解析出 Report ID = 5");
+
+        // 没有 Report ID 的描述符
+        byte[] descNoId = new byte[]{
+                0x05, 0x0D, 0x09, 0x22, (byte) 0xA1, 0x01,
+                0x09, 0x30, 0x15, 0x00, 0x26, (byte) 0xFF, 0x0F,
+                0x75, 0x10, (byte) 0x95, 0x01, (byte) 0x81, 0x02,
+                0x09, 0x31, 0x26, (byte) 0xFF, 0x07, (byte) 0x81, 0x02,
+                (byte) 0xC0
+        };
+        check(com.carbridge.carplay.core.HidDescriptor.touchReportId(descNoId) == 0,
+                "没有 Report ID 时返回 0");
+
+        // 带 ID 的单指报告：[ID, 按下, X_lo, X_hi, Y_lo, Y_hi]
+        byte[] withId = new byte[]{0x05, 0x01, (byte) 0xE8, 0x03, (byte) 0xF4, 0x01}; // x=1000 y=500
+        com.carbridge.carplay.core.HidInput.Touch t =
+                com.carbridge.carplay.core.HidInput.parseTouch(withId, 4095, 2047, 5);
+        check(t.down, "带 Report ID：按下状态正确");
+        check(Math.abs(t.x - 1000f / 4095f) < 1e-6, "带 Report ID：X 未被 ID 字节挤偏");
+        check(Math.abs(t.y - 500f / 2047f) < 1e-6, "带 Report ID：Y 正确");
+
+        // 同一条报告不带 ID（首字节不是 5）→ 按无 ID 解，不能误剥
+        byte[] noId = new byte[]{0x01, (byte) 0xE8, 0x03, (byte) 0xF4, 0x01};
+        com.carbridge.carplay.core.HidInput.Touch t2 =
+                com.carbridge.carplay.core.HidInput.parseTouch(noId, 4095, 2047, 5);
+        check(Math.abs(t2.x - 1000f / 4095f) < 1e-6, "首字节不匹配 → 不剥，坐标仍正确");
+
+        // 带 ID 的多点报告：1 + 6×2 = 13 字节（ID 5，第 0 指 down+x/y）
+        byte[] multi = new byte[]{0x05, 0x00, 0x01, (byte) 0xE8, 0x03, (byte) 0xF4, 0x01,
+                0x01, 0x00, 0x00, 0x00, 0x00, 0x00};
+        com.carbridge.carplay.core.HidInput.Touch t3 =
+                com.carbridge.carplay.core.HidInput.parseTouch(multi, 4095, 2047, 5);
+        check(t3.down && Math.abs(t3.x - 1000f / 4095f) < 1e-6,
+                "带 Report ID 的 12 字节多点报告：按多点布局解");
+
+        // 只剩 4 字节（剥掉 ID 后不足）必须报错，不能静默出 (0,0)
+        boolean threw = false;
+        try {
+            com.carbridge.carplay.core.HidInput.parseTouch(new byte[]{0x05, 0x01, 0x02, 0x03},
+                    4095, 2047, 5);
+        } catch (IllegalArgumentException e) {
+            threw = true;
+        }
+        check(threw, "剥 ID 后不足 5 字节 → 抛异常");
+
+        check(com.carbridge.carplay.core.HidInput.parseTouch(new byte[]{0x01, 0, 0, 0, 0}).down,
+                "5 字节单指报告：down 取首字节");
     }
 
     private static void section(String name) {

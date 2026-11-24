@@ -6,6 +6,7 @@ import android.media.MediaFormat;
 
 import java.nio.ByteBuffer;
 import java.util.List;
+import com.carbridge.carplay.util.Diag;
 
 /**
  * AAC-LC 编码器的<strong>自检</strong>：编一段正弦波，再解回来看峰值。
@@ -128,11 +129,13 @@ public final class AacSelfTest {
             if (dec != null) {
                 try {
                     dec.stop();
-                } catch (Throwable ignored) {
+                } catch (Throwable tDiag) {
+                    Diag.w("AacSelfTest.decodePeak", tDiag);
                 }
                 try {
                     dec.release();
-                } catch (Throwable ignored) {
+                } catch (Throwable tDiag) {
+                    Diag.w("AacSelfTest.decodePeak#2", tDiag);
                 }
             }
         }

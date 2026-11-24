@@ -22,7 +22,7 @@
 | AirPlay pair-setup / pair-verify | CONFIRMED | 实车 | 含 SRP / Ed25519 / X25519 |
 | RTSP SETUP（视频 / 音频 / 触摸） | CONFIRMED | 实车 | RECORD 后进入推流与心跳 |
 | 视频：Car+ H.264 Annex-B 零转码转发 | CONFIRMED | 实车 | 不二次编码；分辨率/帧率优先取车机上报值 |
-| 触摸回传（AirPlay HID → CarLife touch） | CONFIRMED | 实车 | 含车机硬键映射 |
+| 触摸回传（AirPlay HID → CarLife touch） | CONFIRMED | 实车 | 含车机硬键映射；描述符声明 Report ID 时剥首字节（单测） |
 | 音频：媒体通道 | CONFIRMED | 实车 | 音频路由与采集在 `carplay/audio` |
 | 音频：通话 | INFERRED | 实车观察 | 平台限制：第三方 App 无法静音通话流，已改为 **HFP 优先**；不同车机的最终效果仍需逐台确认 |
 | 帧率 / 分辨率自适应 | INFERRED | 实车 + 单测 | 判据为「不低于目标帧率」；实测 Car+ 交付上限约 30fps，上限放开到 120 |

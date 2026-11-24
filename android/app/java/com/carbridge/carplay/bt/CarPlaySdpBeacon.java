@@ -250,9 +250,11 @@ public final class CarPlaySdpBeacon {
         pendingIap2At = 0L;
         if (pending != null) {
             // 车机可能早就断开/走远了：太旧的 socket 交出去只会让新会话一上来就失败。
-            if (System.currentTimeMillis() - at > PENDING_IAP2_MAX_AGE_MS) {
+            // 年龄只算一次（墙钟可能回拨，负数按 0 处理），日志与判据用同一个值。
+            long ageMs = Math.max(0L, System.currentTimeMillis() - at);
+            if (ageMs > PENDING_IAP2_MAX_AGE_MS) {
                 emit(null, "CarPlay 发送端就绪，但暂存的车机 iAP2 连接已过期（"
-                        + ((System.currentTimeMillis() - at) / 1000) + "s），丢弃等它重连");
+                        + (ageMs / 1000) + "s），丢弃等它重连");
                 try {
                     pending.close();
                 } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("SdpBeacon", t);
@@ -353,7 +355,7 @@ public final class CarPlaySdpBeacon {
         if (!started) {
             return "✗ SDP 信标未注册。请重新打开本 App（或点「开始连接」）。";
         }
-        long upSec = (System.currentTimeMillis() - startedAtMs) / 1000L;
+        long upSec = Math.max(0L, System.currentTimeMillis() - startedAtMs) / 1000L;
         boolean threadsOk = acceptLoopsAlive();
         StringBuilder sb = new StringBuilder();
         sb.append("✓ 蓝牙已开启\n");

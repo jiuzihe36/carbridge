@@ -47,6 +47,11 @@ public final class AirPlayInfo {
             return HidDescriptor.touchAxisMaxima(descriptor);
         }
 
+        /** 该设备的触摸 Report ID（报告首字节）；没有 Report ID 返回 0。 */
+        public int touchReportId() {
+            return HidDescriptor.touchReportId(descriptor);
+        }
+
         /**
          * 该设备是不是「按键设备」（方向盘/中控的 Consumer Control 键）。
          *

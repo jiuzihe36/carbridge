@@ -2,6 +2,7 @@ package com.carbridge.carplay.proto;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
+import com.carbridge.carplay.util.Diag;
 
 /**
  * CarLife HU（车机侧）协议常量 + 手写 protobuf 编码。
@@ -347,7 +348,8 @@ public final class HuProto {
                     break;
                 }
             }
-        } catch (Throwable ignored) {
+        } catch (Throwable tDiag) {
+            Diag.w("HuProto.parseModuleStatus", tDiag);
         }
         return out;
     }
@@ -424,7 +426,8 @@ public final class HuProto {
                     break;
                 }
             }
-        } catch (Throwable ignored) {
+        } catch (Throwable tDiag) {
+            Diag.w("HuProto.parseEncoderInfo", tDiag);
         }
         return (w > 0 && h > 0) ? new int[]{w, h, f > 0 ? f : 30} : null;
     }
@@ -458,7 +461,8 @@ public final class HuProto {
                     break;
                 }
             }
-        } catch (Throwable ignored) {
+        } catch (Throwable tDiag) {
+            Diag.w("HuProto.deviceField", tDiag);
         }
         return "";
     }

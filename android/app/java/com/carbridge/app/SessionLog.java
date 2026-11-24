@@ -7,6 +7,7 @@ import java.io.FileOutputStream;
 import java.io.RandomAccessFile;
 import java.util.ArrayList;
 import java.util.List;
+import com.carbridge.carplay.util.Diag;
 
 /**
  * 会话日志：内存环形缓冲 + 落盘文件。
@@ -42,7 +43,8 @@ public final class SessionLog {
         File dir = null;
         try {
             dir = ctx.getExternalFilesDir(null);
-        } catch (Throwable ignored) {
+        } catch (Throwable tDiag) {
+            Diag.w("SessionLog.SessionLog", tDiag);
         }
         this.file = new File(dir == null ? ctx.getFilesDir() : dir, FILE_NAME);
     }
@@ -132,7 +134,8 @@ public final class SessionLog {
                     writeErrorNoted = true;
                     try {
                         android.util.Log.w("carbridge", "日志文件写入失败，后续仍会写内存缓冲: " + t);
-                    } catch (Throwable ignored) {
+                    } catch (Throwable tDiag) {
+                        Diag.w("SessionLog.writeFile", tDiag);
                     }
                 }
             }
@@ -161,7 +164,8 @@ public final class SessionLog {
         synchronized (this) {
             try {
                 if (out != null) out.close();
-            } catch (Throwable ignored) {
+            } catch (Throwable tDiag) {
+                Diag.w("SessionLog.close", tDiag);
             }
             out = null;
         }

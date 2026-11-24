@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import com.carbridge.carplay.util.Diag;
 
 /**
  * AirPlay 主会话（CarPlay 发送端）：把 CarLife 收到的 H.264 推给车机。
@@ -879,7 +880,8 @@ public final class AirPlaySession {
                 sampleTime = AirPlayInfo.asLong(m.get("sampleTime"), -1);
                 break;
             }
-        } catch (Throwable ignored) {
+        } catch (Throwable tDiag) {
+            Diag.w("AirPlaySession.trackAudioConsumption", tDiag);
             return;
         }
         if (sampleTime < 0) return;
@@ -1263,7 +1265,7 @@ public final class AirPlaySession {
                         if (videoChannel != null && !videoChannel.isClosed()) {
                             sendVideoPacket(VideoPackets.keepAlive(info != null && info.keepAliveSendStatsAsBody));
                             // Car+ 断流（>3s 无帧）时，用品牌开屏兜底，避免车机黑屏
-                            if (n % 2 == 0 && System.currentTimeMillis() - lastVideoAt > 3000) {
+                            if (n % 2 == 0 && Math.max(0L, System.currentTimeMillis() - lastVideoAt) > 3000) {
                                 sendSplashFrame();
                             }
                         }
@@ -1940,22 +1942,32 @@ public final class AirPlaySession {
         }
 
         // ── 触摸报告 ──
-        // ⚠️ 逻辑上限来自 HID 描述符，不能写死
+        // ⚠️ 逻辑上限与 Report ID 都来自 HID 描述符，不能写死。
+        //    Report ID：声明了就必须剥掉报告首字节，否则坐标整体错一位。
         int maxX = HidInput.DEFAULT_LOGICAL_MAX;
         int maxY = HidInput.DEFAULT_LOGICAL_MAX;
-        if (info != null) {
+        int reportId = 0;
+        AirPlayInfo.HidDevice axisDev = null;
+        // 优先用「报告所属设备」的描述符：多 HID 设备时不能拿第一台的轴上限套另一台。
+        if (dev != null && dev.touchAxisMaxima() != null) {
+            axisDev = dev;
+        } else if (info != null) {
             for (AirPlayInfo.HidDevice hd : info.hidDevices()) {
-                int[] ax = hd.touchAxisMaxima();
-                if (ax != null) {
-                    maxX = ax[0];
-                    maxY = ax[1];
+                if (hd.touchAxisMaxima() != null) {
+                    axisDev = hd;
                     break;
                 }
             }
         }
+        if (axisDev != null) {
+            int[] ax = axisDev.touchAxisMaxima();
+            maxX = ax[0];
+            maxY = ax[1];
+            reportId = axisDev.touchReportId();
+        }
         HidInput.Touch t;
         try {
-            t = HidInput.parseTouch(report, maxX, maxY);
+            t = HidInput.parseTouch(report, maxX, maxY, reportId);
         } catch (Throwable e) {
             log("车机触摸报告解析失败（" + report.length + "B）: " + e);
             return;
@@ -1989,9 +2001,11 @@ public final class AirPlaySession {
         for (AirPlayInfo.HidDevice hd : devs) {
             int[] ax = hd.touchAxisMaxima();
             HidKeyMap km = hd.keyMap();
+            int rid = hd.touchReportId();
             log("  • uuid=" + hd.uuid + " name=" + hd.name
                     + " 描述符 " + (hd.descriptor == null ? 0 : hd.descriptor.length) + "B"
                     + (ax != null ? " 触摸上限=" + ax[0] + "×" + ax[1] : " 无触摸轴")
+                    + (rid > 0 ? " 触摸ReportID=" + rid : "")
                     + (km != null ? " 按键=" + (km.array ? "Array" : "位图")
                         + " 页=" + (km.page == 0x0C ? "Consumer" : "Telephony")
                         + " usage=" + km.usages.length + "项" : " 无按键表")
@@ -2387,7 +2401,8 @@ public final class AirPlaySession {
         if (s != null) {
             try {
                 s.close();
-            } catch (Exception ignored) {
+            } catch (Exception tDiag) {
+                Diag.w("AirPlaySession.closeQuietly", tDiag);
             }
         }
     }

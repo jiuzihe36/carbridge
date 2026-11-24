@@ -12,6 +12,7 @@ import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
 import android.util.Log;
+import com.carbridge.carplay.util.Diag;
 
 /**
  * VPN 式保活服务：常驻前台通知 + 三把锁，让锁屏/后台**只影响屏幕显示，不打断连接**。
@@ -117,15 +118,18 @@ public final class KeepAliveService extends Service {
     private void releaseLocks() {
         try {
             if (cpuLock != null && cpuLock.isHeld()) cpuLock.release();
-        } catch (Throwable ignored) {
+        } catch (Throwable tDiag) {
+            Diag.w("KeepAliveService.releaseLocks", tDiag);
         }
         try {
             if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
-        } catch (Throwable ignored) {
+        } catch (Throwable tDiag) {
+            Diag.w("KeepAliveService.releaseLocks#2", tDiag);
         }
         try {
             if (mcastLock != null && mcastLock.isHeld()) mcastLock.release();
-        } catch (Throwable ignored) {
+        } catch (Throwable tDiag) {
+            Diag.w("KeepAliveService.releaseLocks#3", tDiag);
         }
         cpuLock = null;
         wifiLock = null;

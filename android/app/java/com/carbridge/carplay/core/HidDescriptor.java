@@ -140,6 +140,21 @@ public final class HidDescriptor {
         return new ArrayList<Integer>(seen);
     }
 
+    /**
+     * 触摸屏 Input 字段的 Report ID；描述符里没有 Report ID 时为 0。
+     *
+     * <p>声明了 Report ID 的 HID 设备，**每个报告的第一个字节都是 ID**，真正的
+     * 触摸数据从第 2 字节开始。不剥掉这一字节，坐标会整体错位（X 高字节被当成
+     * 触点 ID），现场表现是「能点但位置偏移」。要不要剥由发送方决定：
+     * 只有报告首字节确实等于这个 ID 时才剥，兼容「声明了但实际没带」的实现。
+     */
+    public static int touchReportId(byte[] descriptor) {
+        for (Field f : parseInputs(descriptor)) {
+            if ((f.usage == 0x30 || f.usage == 0x31) && f.reportId > 0) return f.reportId;
+        }
+        return 0;
+    }
+
         /**
      * 触摸屏的 (maxX, maxY) 逻辑上限。
      */

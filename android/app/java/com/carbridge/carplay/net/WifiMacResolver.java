@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import com.carbridge.carplay.util.Diag;
 
 /**
  * 本机在车机热点上的 Wi-Fi MAC —— AirPlay SETUP 的 {@code macAddress} 字段。
@@ -56,13 +57,15 @@ public final class WifiMacResolver {
         String name = null;
         try {
             name = nif.getName();
-        } catch (Throwable ignored) {
+        } catch (Throwable tDiag) {
+            Diag.w("WifiMacResolver.resolve", tDiag);
         }
         try {
             byte[] hw = nif.getHardwareAddress();
             String mac = format(hw);
             if (mac != null) return mac;
-        } catch (Throwable ignored) {
+        } catch (Throwable tDiag) {
+            Diag.w("WifiMacResolver.resolve#2", tDiag);
         }
         if (name != null && IFACE.matcher(name).matches()) {
             String direct = readPath("/sys/class/net/" + name + "/address");
@@ -76,7 +79,8 @@ public final class WifiMacResolver {
                 String mac = fromEui64(a);
                 if (mac != null) return mac;
             }
-        } catch (Throwable ignored) {
+        } catch (Throwable tDiag) {
+            Diag.w("WifiMacResolver.resolve#3", tDiag);
         }
         return null;
     }
@@ -110,7 +114,8 @@ public final class WifiMacResolver {
             if (p != null) {
                 try {
                     p.destroy();
-                } catch (Throwable ignored) {
+                } catch (Throwable tDiag) {
+                    Diag.w("WifiMacResolver.readPathAsRoot", tDiag);
                 }
             }
         }

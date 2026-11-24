@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import com.carbridge.carplay.util.Diag;
 
 /**
  * 无线 CarPlay 的 mDNS/Bonjour 层。
@@ -134,7 +135,8 @@ public final class MdnsCarPlay {
         if (l != null && i != null) {
             try {
                 nsd.unregisterService(l);   // 异步，listener 不能复用
-            } catch (Throwable ignored) {
+            } catch (Throwable tDiag) {
+                Diag.w("MdnsCarPlay.unregisterCtrl", tDiag);
             }
         }
     }
@@ -233,7 +235,8 @@ public final class MdnsCarPlay {
         if (l != null) {
             try {
                 nsd.stopServiceDiscovery(l);
-            } catch (Throwable ignored) {
+            } catch (Throwable tDiag) {
+                Diag.w("MdnsCarPlay.stopDiscovery", tDiag);
             }
         }
     }

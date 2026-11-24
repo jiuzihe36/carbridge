@@ -15,6 +15,7 @@ import android.os.ParcelUuid;
 import android.os.Parcelable;
 
 import java.util.Set;
+import com.carbridge.carplay.util.Diag;
 
 /**
  * 蓝牙诊断：搞清楚「车机到底看见了什么」。
@@ -75,13 +76,15 @@ public final class BtDiag {
                 String dn = null;
                 try {
                     dn = d.getName();
-                } catch (Throwable ignored) {
+                } catch (Throwable tDiag) {
+                    Diag.w("BtDiag.run", tDiag);
                 }
                 int dcod = 0;
                 try {
                     dcod = d.getBluetoothClass() == null ? 0
                             : d.getBluetoothClass().getDeviceClass();
-                } catch (Throwable ignored) {
+                } catch (Throwable tDiag) {
+                    Diag.w("BtDiag.run#2", tDiag);
                 }
                 log.onLog("  • " + (dn == null ? "(无名)" : dn) + " [" + d.getAddress()
                         + "] CoD=0x" + Integer.toHexString(dcod));
@@ -133,17 +136,9 @@ public final class BtDiag {
 
         log.onLog("── 强制重查 SDP：fetchUuidsWithSdp() ──");        final BroadcastReceiver receiver = new BroadcastReceiver() {
             @Override
-            @SuppressWarnings("deprecation")   // minSdk 26：带 Class 的重载要 API 33
             public void onReceive(Context c, Intent i) {
-                BluetoothDevice d = i.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
-                Parcelable[] raw = i.getParcelableArrayExtra(BluetoothDevice.EXTRA_UUID);
-                ParcelUuid[] u = null;
-                if (raw != null && raw.length > 0 && raw[0] instanceof ParcelUuid) {
-                    u = new ParcelUuid[raw.length];
-                    for (int k = 0; k < raw.length; k++) {
-                        u[k] = (ParcelUuid) raw[k];
-                    }
-                }
+                BluetoothDevice d = com.carbridge.carplay.bt.Bt.deviceFrom(i);
+                ParcelUuid[] u = com.carbridge.carplay.bt.Bt.uuidsFrom(i);
                 if (d == null) return;
                 log.onLog("• SDP 重查 " + name(d) + " [" + d.getAddress() + "]: " + join(u));
                 log.onLog("   " + verdict(u));
@@ -175,7 +170,8 @@ public final class BtDiag {
             public void run() {
                 try {
                     ctx.getApplicationContext().unregisterReceiver(receiver);
-                } catch (Throwable ignored) {
+                } catch (Throwable tDiag) {
+                    Diag.w("BtDiag.run#3", tDiag);
                 }
                 log.onLog("── 诊断结束 ──");
             }
@@ -201,7 +197,8 @@ public final class BtDiag {
         try {
             android.bluetooth.BluetoothDevice car = CarPairing.findCar();
             if (car != null) carHint = car.getAddress();
-        } catch (Throwable ignored) {
+        } catch (Throwable tDiag) {
+            Diag.w("BtDiag.scanEir", tDiag);
         }
         final String hint = carHint;
         com.carbridge.carplay.bt.BtEirSniffer sniffer =
