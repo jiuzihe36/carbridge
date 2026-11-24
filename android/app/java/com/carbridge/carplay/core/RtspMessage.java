@@ -19,6 +19,18 @@ public final class RtspMessage {
 
     public static final String CONTENT_TYPE_BPLIST = "application/x-apple-binary-plist";
 
+    /**
+     * 单行头部上限（64KB）。
+     *
+     * <p>控制通道是从车机连过来的普通 TCP；对端一旦不发换行（固件 bug、半包卡死、
+     * 或根本不是 RTSP），{@code readLine} 的缓冲会只增不减，几百 KB 垃圾就能把进程顶到 OOM。
+     * 真实的 RTSP 头行最长也就几百字节，64KB 已经很宽松。
+     */
+    public static final int MAX_LINE = 64 * 1024;
+
+    /** body 上限（8MB）。/info 的 plist 只有几 KB，超过这个量级一定是长度字段坏了。 */
+    public static final int MAX_BODY = 8 * 1024 * 1024;
+
     private RtspMessage() {
     }
 
@@ -108,7 +120,14 @@ public final class RtspMessage {
         if (statusLine == null) return null;
         String[] parts = statusLine.split(" ", 3);
         if (parts.length < 2) throw new IOException("非法状态行: " + statusLine);
-        int status = Integer.parseInt(parts[1].trim());
+        int status;
+        try {
+            status = Integer.parseInt(parts[1].trim());
+        } catch (NumberFormatException e) {
+            // 不能让它以 NumberFormatException 逃出去：调用点只 catch IOException，
+            // 会把「对端发了垃圾」当成未捕获异常。
+            throw new IOException("非法状态码: " + statusLine);
+        }
         int cseq = -1;
         Map<String, String> headers = new LinkedHashMap<String, String>();
         String line;
@@ -131,13 +150,21 @@ public final class RtspMessage {
         r.headers.putAll(headers);
         String cl = r.header("Content-Length");
         if (cl != null) {
-            int len = Integer.parseInt(cl.trim());
+            int len;
+            try {
+                len = Integer.parseInt(cl.trim());
+            } catch (NumberFormatException e) {
+                throw new IOException("非法 Content-Length: " + cl);
+            }
+            if (len < 0 || len > MAX_BODY) {
+                throw new IOException("Content-Length 越界: " + len + "（上限 " + MAX_BODY + "）");
+            }
             r.body = readN(in, len);
         }
         return r;
     }
 
-    /** 读一行（去掉 CRLF）。 */
+    /** 读一行（去掉 CRLF）；超过 {@link #MAX_LINE} 直接报错，不让缓冲无限增长。 */
     public static String readLine(InputStream in) throws IOException {
         ByteArrayOutputStream b = new ByteArrayOutputStream(64);
         int c;
@@ -149,6 +176,9 @@ public final class RtspMessage {
                 return new String(arr, 0, n, StandardCharsets.US_ASCII);
             }
             b.write(c);
+            if (b.size() > MAX_LINE) {
+                throw new IOException("RTSP 头行超过 " + MAX_LINE + " 字节（对端未按行结束或数据损坏）");
+            }
         }
         return b.size() == 0 ? null : new String(b.toByteArray(), StandardCharsets.US_ASCII);
     }

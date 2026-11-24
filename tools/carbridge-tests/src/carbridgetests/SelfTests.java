@@ -43,6 +43,7 @@ public final class SelfTests {
         cryptoVectors();
         airPlayInfo();
         hid();
+        rtsp();
         linkEngine();
 
         System.out.println();
@@ -852,6 +853,85 @@ public final class SelfTests {
 
         check(com.carbridge.carplay.core.HidInput.parseTouch(new byte[]{0x01, 0, 0, 0, 0}).down,
                 "5 字节单指报告：down 取首字节");
+    }
+
+    // ---------------------------------------------------------------- RTSP
+
+    private static void rtsp() throws java.io.IOException {
+        section("RtspMessage（控制通道收发 / 长度闸门）");
+
+        byte[] req = com.carbridge.carplay.core.RtspMessage.request("GET", "/info", 3,
+                new byte[]{1, 2, 3});
+        String s = new String(req, java.nio.charset.StandardCharsets.US_ASCII);
+        check(s.startsWith("GET /info RTSP/1.0\r\n"), "请求行格式");
+        check(s.contains("CSeq: 3\r\n"), "CSeq 写对了");
+        check(s.contains("Content-Length: 3\r\n"), "body 长度与实际一致");
+        check(s.contains("User-Agent: " + com.carbridge.carplay.core.RtspMessage.userAgent()),
+                "User-Agent 与 SETUP 同源");
+
+        com.carbridge.carplay.core.RtspMessage.Response r = parse(
+                "RTSP/1.0 200 OK\r\nCSeq: 7\r\nContent-Type: text/parameters\r\n"
+                        + "Content-Length: 3\r\n\r\nabc");
+        check(r != null && r.status == 200, "状态码 200");
+        check(r != null && r.cseq == 7, "CSeq 解出 7");
+        check(r != null && r.body.length == 3 && r.body[0] == 'a', "body 按 Content-Length 读全");
+
+        com.carbridge.carplay.core.RtspMessage.Response noCseq = parse("RTSP/1.0 200 OK\r\n\r\n");
+        check(noCseq != null && noCseq.cseq == -1, "没有 CSeq → -1（调用方据此放行）");
+
+        // 非数字状态码必须变成 IOException，不能把 NumberFormatException 抛给只 catch IOException 的调用点
+        boolean io1 = false;
+        try {
+            parse("RTSP/1.0 abc OK\r\n\r\n");
+        } catch (java.io.IOException e) {
+            io1 = true;
+        }
+        check(io1, "状态码非数字 → IOException");
+
+        boolean io2 = false;
+        try {
+            parse("RTSP/1.0 200 OK\r\nContent-Length: 12x\r\n\r\n");
+        } catch (java.io.IOException e) {
+            io2 = true;
+        }
+        check(io2, "Content-Length 非数字 → IOException");
+
+        boolean io3 = false;
+        try {
+            parse("RTSP/1.0 200 OK\r\nContent-Length: " + (com.carbridge.carplay.core.RtspMessage.MAX_BODY + 1)
+                    + "\r\n\r\n");
+        } catch (java.io.IOException e) {
+            io3 = true;
+        }
+        check(io3, "Content-Length 超上限 → IOException（不会先分配内存）");
+
+        // 一行几千字节的垃圾：没有换行时必须被长度闸门挡住
+        StringBuilder junk = new StringBuilder();
+        for (int i = 0; i < com.carbridge.carplay.core.RtspMessage.MAX_LINE + 10; i++) junk.append('A');
+        boolean io4 = false;
+        try {
+            com.carbridge.carplay.core.RtspMessage.readLine(
+                    new java.io.ByteArrayInputStream(junk.toString()
+                            .getBytes(java.nio.charset.StandardCharsets.US_ASCII)));
+        } catch (java.io.IOException e) {
+            io4 = true;
+        }
+        check(io4, "无换行的超长行 → IOException（缓冲不会无限涨）");
+
+        // 裸 LF 也要能解（少数实现不发 CR）
+        try {
+            String lf = com.carbridge.carplay.core.RtspMessage.readLine(
+                    new java.io.ByteArrayInputStream("CSeq: 1\n".getBytes(
+                            java.nio.charset.StandardCharsets.US_ASCII)));
+            check("CSeq: 1".equals(lf), "裸 LF 行尾也能解");
+        } catch (java.io.IOException e) {
+            check(false, "裸 LF 行尾也能解（抛了 " + e + "）");
+        }
+    }
+
+    private static com.carbridge.carplay.core.RtspMessage.Response parse(String raw) throws java.io.IOException {
+        return com.carbridge.carplay.core.RtspMessage.readResponse(
+                new java.io.ByteArrayInputStream(raw.getBytes(java.nio.charset.StandardCharsets.US_ASCII)));
     }
 
     private static void section(String name) {

@@ -117,9 +117,9 @@ public final class CtrlIntServer {
             sock.setSoTimeout(3000);
             BufferedReader in = new BufferedReader(
                     new InputStreamReader(sock.getInputStream(), StandardCharsets.UTF_8));
-            String request = in.readLine();
+            String request = readLineLimited(in);
             String line;
-            while ((line = in.readLine()) != null && line.length() > 0) {
+            while ((line = readLineLimited(in)) != null && line.length() > 0) {
                 // 读完请求头
             }
             if (request == null) return;
@@ -136,5 +136,31 @@ public final class CtrlIntServer {
         } catch (Throwable t) {
             listener.onLog("ctrl-int 处理失败: " + t);
         }
+    }
+
+    /** 单行上限：真实的 ctrl-int 请求行不到 200 字节，超过它一定是垃圾/未按行结束。 */
+    private static final int MAX_LINE = 8 * 1024;
+
+    /**
+     * 读一行，超过 {@link #MAX_LINE} 直接抛异常。
+     *
+     * <p>{@link BufferedReader#readLine()} 没有长度上限：对端只发字节不发换行时，
+     * 缓冲会一直涨到 OOM。这条通道是车机连进来的普通 TCP，必须自己设闸。
+     */
+    private static String readLineLimited(BufferedReader in) throws java.io.IOException {
+        StringBuilder sb = new StringBuilder(64);
+        int c;
+        while ((c = in.read()) != -1) {
+            if (c == '\n') {
+                int n = sb.length();
+                if (n > 0 && sb.charAt(n - 1) == '\r') sb.setLength(n - 1);
+                return sb.toString();
+            }
+            sb.append((char) c);
+            if (sb.length() > MAX_LINE) {
+                throw new java.io.IOException("请求行超过 " + MAX_LINE + " 字节（对端未按行结束）");
+            }
+        }
+        return sb.length() == 0 ? null : sb.toString();
     }
 }

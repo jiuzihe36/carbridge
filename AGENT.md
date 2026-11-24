@@ -92,7 +92,7 @@ BLUETOOTH → SDP 信标 → iAP2 link（SYN/SYNACK/ACK）→ AUTH → IDENTIFIC
 ## 6. 验证门禁
 
 ```bash
-tools/verify.sh            # 架构守卫 + 纯逻辑单测（必跑）
+tools/verify.sh            # docset + 架构守卫 + 静态体检 + 纯逻辑单测（必跑）
 BUILD=1 tools/verify.sh    # 追加 APK 构建
 SMOKE=1 tools/verify.sh    # 追加载机 + 假车机全流程（需手机 + 平板）
 ```
