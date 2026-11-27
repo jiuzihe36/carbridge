@@ -146,6 +146,8 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
     private volatile long fpsWindowStart;
     /** 由视频线程写、主线程读（updateMetrics）→ 必须 volatile（同组其它字段都标了）。 */
     private volatile float fpsValue;
+    /** Car+ 进入 STREAMING 的时刻（0=未在推流）：会话结束据此算「实测平均帧率」给自适应用。 */
+    private volatile long streamingSinceMs;
     private volatile long totalBytes;
     private volatile long firstFrameDelayMs;
     /** 当前存活的 Activity 实例（防止系统恢复任务时出现两套 CarPlay/iAP2 发送端）。 */
@@ -683,6 +685,60 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         return QualityPrefs.paramsForStart(autoFit, carW, carH, carFps,
                 encWidth, encHeight, fpsIndex);
     }
+    /**
+     * Car+ 自适应（AdaptiveResolution 的唯一接线点）：会话结束后按本轮**实测平均帧率**
+     * 给「下一次连接」调整编码参数。
+     *
+     * <p>安全边界：① 只改下一次连接的请求参数（当前会话不动）；② 8 秒以内的样本不判
+     * （热身期帧率系统性偏低）；③ 迟滞死区 60%~90%（防临界抖动）；④ 车机画布优先，
+     * 画布规则赢过帧率规则；⑤ autoFit 关闭时完全不参与。
+     */
+    private void maybeAdaptForNextSession() {
+        long since = streamingSinceMs;
+        streamingSinceMs = 0;
+        if (since <= 0 || !autoFit) return;
+        long seconds = Math.max(0L, System.currentTimeMillis() - since) / 1000;
+        if (seconds < com.carbridge.carplay.core.AdaptiveResolution.MIN_SESSION_SECONDS) return;
+        int frames = client != null ? client.frameCount() : 0;
+        double measured = seconds > 0 ? frames / (double) seconds : 0;
+        int curW = client != null && client.encodedWidth() > 0 ? client.encodedWidth() : encWidth;
+        int curH = client != null && client.encodedHeight() > 0 ? client.encodedHeight() : encHeight;
+        int curFps = FPS_OPTIONS[fpsIndex];
+        com.carbridge.carplay.core.AdaptiveResolution.Suggestion sg =
+                com.carbridge.carplay.core.AdaptiveResolution.suggest(
+                        carW, carH, carFps, curW, curH, curFps, measured, seconds);
+        if (sg == null) return;
+        if (!sg.changed && sg.width == curW && sg.height == curH && sg.fps == curFps) {
+            log("画质自适应：" + sg.reason);
+            return;
+        }
+        log("画质自适应 → 下一次连接 " + curW + "x" + curH + "@" + curFps + " → "
+                + sg.width + "x" + sg.height + "@" + sg.fps + "（" + sg.reason + "）");
+        if (sg.width != curW || sg.height != curH) {
+            encWidth = clampDim(sg.width);
+            encHeight = clampDim(sg.height);
+        }
+        int idx = fpsToOptionIndex(sg.fps);
+        if (idx >= 0) fpsIndex = idx;
+        getSharedPreferences(PREF_NAME, MODE_PRIVATE).edit()
+                .putInt(KEY_W, encWidth)
+                .putInt(KEY_H, encHeight)
+                .putInt(KEY_FPS, fpsIndex)
+                .apply();
+        if (editWidth != null) editWidth.setText(String.valueOf(encWidth));
+        if (editHeight != null) editHeight.setText(String.valueOf(encHeight));
+        updateQualityTargetView();
+    }
+
+    /** 把建议帧率映射到最近的（不高于它的）可选档位；没有更低的就用最低档。 */
+    private static int fpsToOptionIndex(int fps) {
+        int best = -1;
+        for (int i = 0; i < FPS_OPTIONS.length; i++) {
+            if (FPS_OPTIONS[i] <= fps) best = i;
+        }
+        return best >= 0 ? best : 0;
+    }
+
     /** 刷新画质卡里的“车机画布 / 实际编码”状态。只在主线程调用。 */
     private void updateQualityTargetView() {
         if (switchAutoFit != null && switchAutoFit.isChecked() != autoFit) {
@@ -894,6 +950,14 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
             @Override
             public void run() {
                 trackState(s);
+                // Car+ 会话计时段：进入 STREAMING 记起点；回到终态时按实测帧率给
+                // 「下一次连接」做自适应（AdaptiveResolution，有迟滞、只在阶梯上走一档）。
+                if (s == HuClient.State.STREAMING) {
+                    if (streamingSinceMs == 0) streamingSinceMs = System.currentTimeMillis();
+                } else if (s == HuClient.State.IDLE || s == HuClient.State.ERROR
+                        || s == HuClient.State.CLOSED) {
+                    maybeAdaptForNextSession();
+                }
                 // 状态 → 显示规则全部由 StatusView 决定（纯映射、有单测），这里只落地副作用
                 StatusView sv = StatusView.of(kindOf(s));
                 markBusy(sv.busy);
