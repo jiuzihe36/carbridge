@@ -25,7 +25,9 @@ public final class H264 {
     public static List<byte[]> splitNals(byte[] annexB) {
         List<int[]> starts = new ArrayList<int[]>();   // {startOffset, startCodeLen}
         int i = 0;
-        while (i + 3 < annexB.length) {
+        // 循环条件 i+2 < length：恰好顶到末尾的 3 字节起始码（i == length−3）也要识别，
+        // 否则它被并进前一个 NAL 的载荷，AVCC 里混入起始码 → 解码器丢帧。
+        while (i + 2 < annexB.length) {
             if (annexB[i] == 0 && annexB[i + 1] == 0
                     && (annexB[i + 2] == 1
                         || (annexB[i + 2] == 0 && i + 3 < annexB.length && annexB[i + 3] == 1))) {
@@ -96,6 +98,12 @@ public final class H264 {
 
     /** 构造 avcC：`01 sps[1] sps[2] sps[3] FF E1 <len16> SPS 01 <len16> PPS`。 */
     public static byte[] avcC(byte[] sps, byte[] pps) {
+        // ⚠️ 长度闸：车机侧 CarLife 流是网络面输入，来一个 1~3 字节、头字节恰为 0x67
+        //    的畸形「NAL」就会在这里 AIOOBE（调用点在 submitVideo 的 try 之外，会直逃
+        //    视频回调线程）。短 NAL 构造不出合法 avcC，直接返回 null。
+        if (sps == null || sps.length < 4 || pps == null || pps.length < 1) {
+            return null;
+        }
         int size = 5 + 3 + sps.length + 3 + pps.length;
         byte[] out = new byte[size];
         int o = 0;
@@ -230,6 +238,8 @@ public final class H264 {
             int zeros = 0;
             while (bit() == 0) zeros++;
             if (zeros == 0) return 0;
+            // 前导零 >24 直接拒绝：合法 ue 值有界，1<<31 起 int 移位回绕会返回垃圾值
+            if (zeros > 24) throw new IllegalArgumentException("ue 前导零过多: " + zeros);
             return (1 << zeros) - 1 + u(zeros);
         }
 

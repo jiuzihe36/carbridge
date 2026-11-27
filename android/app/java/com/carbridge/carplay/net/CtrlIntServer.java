@@ -49,7 +49,9 @@ public final class CtrlIntServer {
 
     /** 启动监听。返回实际绑定的端口（失败返回 -1）。 */
     public int start(int port) {
-        if (running) return port;
+        // ⚠️ 重入必须返回**实际绑定**的端口，不能回入参：改动态端口时两者不同，
+        //    mDNS 会把错端口广播给车机，反连必失败。
+        if (running) return server != null ? server.getLocalPort() : port;
         try {
             server = new ServerSocket(port, 4, InetAddress.getByName("0.0.0.0"));
         } catch (Throwable t) {
@@ -81,12 +83,23 @@ public final class CtrlIntServer {
     }
 
     private void acceptLoop() {
+        int acceptFails = 0;
         while (running) {
             final Socket sock;
             try {
                 sock = server.accept();
+                acceptFails = 0;
             } catch (Throwable t) {
-                if (running) listener.onLog("ctrl-int accept 失败: " + t);
+                if (!running) break;
+                // ⚠️ 持久性失败（如 EMFILE fd 耗尽）不能无条件 continue：
+                //    立即重试 = 100% CPU + 每圈一条日志刷屏。失败计数退避。
+                acceptFails++;
+                listener.onLog("ctrl-int accept 失败（第 " + acceptFails + " 次）: " + t);
+                try {
+                    Thread.sleep(Math.min(200L * acceptFails, 3000L));
+                } catch (InterruptedException ie) {
+                    return;
+                }
                 continue;
             }
             // 每条连接一条线程。

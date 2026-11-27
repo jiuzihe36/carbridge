@@ -1400,7 +1400,12 @@ public final class AirPlaySession {
         //    STREAMING 才解析，就永远抓不到 PPS → 发不出 OP_VIDEO_CONFIG → 车机没 avcC
         //    → 解码器不启动 → 黑屏（真机实测：DiPlay 只有 video first decrypted frame，
         //    没有 video codec config）。
-        cacheCodecConfig(annexB);
+        try {
+            cacheCodecConfig(annexB);
+        } catch (Throwable t) {
+            // 畸形帧的解析异常不能逃出视频回调线程（一帧坏 ≠ 链路死）
+            Diag.w("AirPlaySession.cacheCodecConfig", t);
+        }
 
         // Car+ 有真实帧了：记录时间戳，用于「断流则切回开屏」判断
         lastVideoAt = System.currentTimeMillis();

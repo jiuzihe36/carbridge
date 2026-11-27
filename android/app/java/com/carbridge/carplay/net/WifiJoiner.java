@@ -190,6 +190,10 @@ public final class WifiJoiner {
 
             netCallback = new ConnectivityManager.NetworkCallback() {
                 @Override public void onAvailable(Network network) {
+                    // ⚠️ release() 之后迟到的系统回调会把进程重新绑回车机热点并回调上层
+                    //    → stop 之后 mDNS/ctrl 整套复活（幽灵会话）。unregisterNetworkCallback
+                    //    挡不住已在派发的回调，必须自查。
+                    if (released) return;
                     bound = network;
                     bindProcess(network);
                 }
@@ -282,6 +286,7 @@ public final class WifiJoiner {
      * 组播跟随进程绑定的网络，不绑就走默认网络（车机热点），车机收不到。
      */
     private void bindProcess(Network network) {
+        if (released) return;   // 迟到的回调不许复活已释放的入网（同 onAvailable 的守卫）
         try {
             boolean ok = ConnectivityManager.setProcessDefaultNetwork(network);
             String ip = linkAddressOf(network);

@@ -140,7 +140,7 @@ public final class PairSetupSession {
                 srp.clientPublicKey(),      // pad 到 384 字节的 A
                 srp.clientProof(),
                 sessionKey);
-        if (!java.util.Arrays.equals(expect, serverProof)) {
+        if (!java.security.MessageDigest.isEqual(expect, serverProof)) {
             log("M4 服务端证明不匹配（配对码错误？）");
             state = State.FAILED;
             return;
@@ -157,7 +157,7 @@ public final class PairSetupSession {
                 Tlv8.encode(Tlv8.IDENTIFIER, idBytes),
                 Tlv8.encode(Tlv8.PUBLIC_KEY, identity.publicKey),
                 Tlv8.encode(Tlv8.SIGNATURE, sig));
-        byte[] sealed = PairVerifySession.chacha(encKey, MSG05, sub);
+        byte[] sealed = PairVerifySession.chachaSeal(encKey, MSG05, sub);
 
         state = State.SENT_M5;
         listener.onTlvOut(Tlv8.concat(
@@ -174,7 +174,14 @@ public final class PairSetupSession {
             return;
         }
         byte[] encKey = AirPlayStreamCrypto.hkdfSha512(sessionKey, SALT, INFO, 32);
-        byte[] sub = PairVerifySession.chacha(encKey, "PS-Msg06", sealed);
+        byte[] sub;
+        try {
+            sub = PairVerifySession.chachaOpen(encKey, "PS-Msg06", sealed);
+        } catch (GeneralSecurityException e) {
+            log("M6 解密/tag 校验失败（密文被篡改或密钥不符）: " + e);
+            state = State.FAILED;
+            return;
+        }
         byte[] theirId = Tlv8.valueOf(sub, Tlv8.IDENTIFIER);
         byte[] theirPk = Tlv8.valueOf(sub, Tlv8.PUBLIC_KEY);
         byte[] theirSig = Tlv8.valueOf(sub, Tlv8.SIGNATURE);
@@ -218,10 +225,10 @@ public final class PairSetupSession {
         }
     }
 
-    /** 日志里别明文打配对码。 */
+    /** 日志里别明文打配对码（定长掩码：4 位 PIN 露首末就只剩 100 种可能）。 */
     private static String mask(String pw) {
         if (pw == null || pw.isEmpty()) return "(空)";
-        return pw.length() <= 2 ? "**" : pw.charAt(0) + "*" + pw.charAt(pw.length() - 1);
+        return "****";
     }
 
     private static String hex(byte[] b) {

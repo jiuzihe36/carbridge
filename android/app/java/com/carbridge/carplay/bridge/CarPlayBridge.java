@@ -54,7 +54,9 @@ public final class CarPlayBridge implements AirPlaySession.Listener {
 
     private final Sink sink;
 
-    private AirPlaySession session;
+    /** 跨线程：connect 在 NSD/iAP2 回调线程、disconnect 在主线程、submitVideo 在
+     *  hu-video 线程 —— 无 volatile 读方可长期看到旧值（新会话不可见 = 黑屏静默 return）。 */
+    private volatile AirPlaySession session;
     private AirPlayInfo info;
     private SplashFrame splash;
 
@@ -72,7 +74,8 @@ public final class CarPlayBridge implements AirPlaySession.Listener {
     }
 
     public boolean isRunning() {
-        return session != null && session.state() == AirPlaySession.State.STREAMING;
+        AirPlaySession s = session;   // 局部拷贝：与主线程 disconnect 竞态时二次解引用会 NPE
+        return s != null && s.state() == AirPlaySession.State.STREAMING;
     }
 
     public void setStreamSize(int w, int h) {
@@ -89,6 +92,11 @@ public final class CarPlayBridge implements AirPlaySession.Listener {
     public void connect(String host, int port) {
         disconnect();
         session = new AirPlaySession(host, port, this);
+        // 触摸折叠状态跟着会话走：旧会话丢了 UP 时（lastDown=true），新会话的第一个
+        // 同坐标 DOWN 会被折叠成「状态没变」直接丢掉 —— 车机丢一次点按。
+        lastDown = false;
+        lastX = -1;
+        lastY = -1;
         // 会话建立前抓到的 SPS+PPS 必须先灌进去，否则会话内等不到 PPS、发不出配置
         byte[] avcC = cachedAvcC;
         if (avcC != null) {
@@ -303,7 +311,8 @@ public final class CarPlayBridge implements AirPlaySession.Listener {
 
     @Override
     public void onDisplaySize(int width, int height) {
-        AirPlayInfo i = session != null ? session.info() : null;
+        AirPlaySession s = session;
+        AirPlayInfo i = s != null ? s.info() : null;
         AirPlayInfo.Display d = i != null ? i.primaryDisplay() : null;
         int maxFps = d != null ? d.maxFps : 0;
         onDisplaySize(width, height, maxFps);

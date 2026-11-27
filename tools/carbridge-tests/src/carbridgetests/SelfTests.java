@@ -46,6 +46,7 @@ public final class SelfTests {
         rtsp();
         hidKeys();
         linkEngine();
+        aeadAndBplist();
 
         System.out.println();
         System.out.println("通过 " + passed + " / 失败 " + failed);
@@ -1016,6 +1017,82 @@ public final class SelfTests {
     private static com.carbridge.carplay.core.RtspMessage.Response parse(String raw) throws java.io.IOException {
         return com.carbridge.carplay.core.RtspMessage.readResponse(
                 new java.io.ByteArrayInputStream(raw.getBytes(java.nio.charset.StandardCharsets.US_ASCII)));
+    }
+
+    // ---------------------------------------------------------------- AEAD 与 Bplist 边界
+
+    /**
+     * 第 5 批审计修复的钉死测试：
+     * chachaSeal/chachaOpen 必须真 AEAD（tag 校验），Bplist 对越界长度必须抛异常而不是 OOM。
+     */
+    private static void aeadAndBplist() throws Exception {
+        section("AEAD（ChaCha20-Poly1305 seal/open）与 Bplist 边界");
+
+        byte[] key = new byte[32];
+        for (int i = 0; i < 32; i++) key[i] = (byte) (i * 7 + 1);
+        byte[] plain = "pair-verify 载荷测试 {IDENTIFIER, SIGNATURE}".getBytes("UTF-8");
+
+        // 1) seal → open 往返一致，且 open 输出不多尾巴（旧「再加密一次」会多 32B）
+        byte[] sealed = com.carbridge.carplay.pairing.PairVerifySession.chachaSeal(key, "PV-Msg02", plain);
+        byte[] opened = com.carbridge.carplay.pairing.PairVerifySession.chachaOpen(key, "PV-Msg02", sealed);
+        check(java.util.Arrays.equals(plain, opened), "seal→open 往返一致");
+        check(opened.length == plain.length, "open 输出无尾部残留（旧误用会多 32B）");
+
+        // 2) 篡改密文任意比特 → open 必须抛（旧实现 tag 从不校验，篡改静默通过）
+        byte[] tampered = sealed.clone();
+        tampered[3] ^= 0x01;
+        boolean threw = false;
+        try {
+            com.carbridge.carplay.pairing.PairVerifySession.chachaOpen(key, "PV-Msg02", tampered);
+        } catch (java.security.GeneralSecurityException e) {
+            threw = true;
+        }
+        check(threw, "篡改密文 → chachaOpen 抛 AEAD 异常（tag 真校验）");
+
+        // 3) 标签（nonce）不同 → 打不开
+        threw = false;
+        try {
+            com.carbridge.carplay.pairing.PairVerifySession.chachaOpen(key, "PV-Msg03", sealed);
+        } catch (java.security.GeneralSecurityException e) {
+            threw = true;
+        }
+        check(threw, "nonce 标签不符 → chachaOpen 抛异常");
+
+        // 4) Bplist 正常往返（先确认没把好输入弄坏）
+        java.util.Map<String, Object> m = new java.util.LinkedHashMap<String, Object>();
+        m.put("widthPixels", 1920L);
+        m.put("name", "car");
+        java.util.List<Object> arr = new java.util.ArrayList<Object>();
+        arr.add(1L);
+        arr.add("x");
+        m.put("list", arr);
+        Object back = com.carbridge.carplay.core.Bplist.read(com.carbridge.carplay.core.Bplist.write(m));
+        check(back instanceof java.util.Map
+                && "car".equals(((java.util.Map<?, ?>) back).get("name")), "Bplist 写读往返");
+
+        // 5) Bplist 对抗输入：numObjects 巨大（旧实现直接 new long[0x40000000] → OOM Error 逃逸）
+        byte[] evil = com.carbridge.carplay.core.Bplist.write(m);
+        int trailer = evil.length - 32;
+        // trailer 的 numObjects（8 字节 BE，偏移 trailer+8）改写成 2^30：
+        byte[] evilNum = evil.clone();
+        for (int i = 0; i < 8; i++) evilNum[trailer + 8 + i] = 0;
+        evilNum[trailer + 8 + 3] = 0x40;   // = 00 00 00 00 40 00 00 00 → 0x40000000
+        threw = false;
+        try {
+            com.carbridge.carplay.core.Bplist.read(evilNum);
+        } catch (IllegalArgumentException e) {
+            threw = true;
+        }
+        check(threw, "numObjects=2^30 → IllegalArgumentException（不再 OOM）");
+
+        // 6) 截断的 bplist → 抛异常（不 AIOOBE）
+        threw = false;
+        try {
+            com.carbridge.carplay.core.Bplist.read(java.util.Arrays.copyOf(evil, 20));
+        } catch (RuntimeException e) {
+            threw = true;
+        }
+        check(threw, "截断 bplist → 抛异常");
     }
 
     private static void section(String name) {

@@ -145,8 +145,15 @@ public final class PairVerifySession {
         sharedSecret = X25519.sharedSecret(ephPriv, peerEphPub);
         verifyKey = AirPlayStreamCrypto.hkdfSha512(sharedSecret, SALT, INFO, 32);
 
-        // ENCRYPTED_DATA 里装的是 {IDENTIFIER, SIGNATURE}，先解
-        byte[] sub = chacha(verifyKey, MSG02, sealed);
+        // ENCRYPTED_DATA 里装的是 {IDENTIFIER, SIGNATURE}，先解（open：tag 不符即抛异常）
+        byte[] sub;
+        try {
+            sub = chachaOpen(verifyKey, MSG02, sealed);
+        } catch (GeneralSecurityException e) {
+            log("M2 解密/tag 校验失败（密文被篡改或密钥不符）: " + e);
+            state = State.FAILED;
+            return;
+        }
         byte[] peerId = Tlv8.valueOf(sub, Tlv8.IDENTIFIER);
         byte[] sig = Tlv8.valueOf(sub, Tlv8.SIGNATURE);
         log("M2 解开：对端 id=" + (peerId == null ? "?" : new String(peerId, StandardCharsets.UTF_8))
@@ -161,6 +168,11 @@ public final class PairVerifySession {
                 return;
             }
             log("M2 验签通过");
+        } else if (peerLongTermKey != null) {
+            // 有钉扎就必须验：对端把 SIGNATURE 剥掉（sig==null）不能静默放行
+            log("M2 缺 SIGNATURE，但对端有钉扎公钥 → 判失败（不允许绕过验签）");
+            state = State.FAILED;
+            return;
         } else if (sig != null) {
             log("⚠ 无对端长期公钥，跳过 M2 验签（需 mDNS `pk` 或 iAP2 0x4301 参数 4）");
         }
@@ -170,7 +182,7 @@ public final class PairVerifySession {
                 Tlv8.encode(Tlv8.IDENTIFIER, myId),
                 Tlv8.encode(Tlv8.SIGNATURE, Ed25519.sign(identity.seed,
                         Tlv8.concat(ephPub, myId, peerEphPub))));
-        byte[] sealed3 = chacha(verifyKey, MSG03, sub3);
+        byte[] sealed3 = chachaSeal(verifyKey, MSG03, sub3);
         byte[] m3 = Tlv8.concat(
                 Tlv8.encodeUInt(Tlv8.STATE, 3),
                 Tlv8.encode(Tlv8.ENCRYPTED_DATA, sealed3));
@@ -197,12 +209,27 @@ public final class PairVerifySession {
         /**
      * pair-verify 的数据用 **ChaCha20-Poly1305**（AEAD，输出含 16 字节 tag），
      * 对齐 DiPlay `AirPlayCrypto.chachaSeal/chachaOpen`。
+     *
+     * <p>⚠️ 加密与解密**必须分开**：历史上这里只有一个永远 ENCRYPT_MODE 的 chacha()，
+     * 解密靠「对密文再加密一次」的流密码巧合还原明文 —— 明文对了，但 Poly1305 tag
+     * 从不校验（篡改密文任意比特无异常），且输出尾部多 32 字节被喂给 Tlv8 解析器。
      */
-    public static byte[] chacha(byte[] key, String label, byte[] data)
+    public static byte[] chachaSeal(byte[] key, String label, byte[] data)
+            throws GeneralSecurityException {
+        return chachaCrypt(javax.crypto.Cipher.ENCRYPT_MODE, key, label, data);
+    }
+
+    /** 解密并校验 tag：被篡改/密钥不符抛 AEADBadTagException，上层据此判 FAILED。 */
+    public static byte[] chachaOpen(byte[] key, String label, byte[] data)
+            throws GeneralSecurityException {
+        return chachaCrypt(javax.crypto.Cipher.DECRYPT_MODE, key, label, data);
+    }
+
+    private static byte[] chachaCrypt(int mode, byte[] key, String label, byte[] data)
             throws GeneralSecurityException {
         byte[] nonce = nonceLabel(label);
         javax.crypto.Cipher c = javax.crypto.Cipher.getInstance("ChaCha20-Poly1305");
-        c.init(javax.crypto.Cipher.ENCRYPT_MODE,
+        c.init(mode,
                 new javax.crypto.spec.SecretKeySpec(key, "ChaCha20"),
                 new javax.crypto.spec.IvParameterSpec(nonce));
         return c.doFinal(data);

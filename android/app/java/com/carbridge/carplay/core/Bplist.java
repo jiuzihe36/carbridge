@@ -202,16 +202,40 @@ public final class Bplist {
         long topObject = readInt(data, trailer + 16, 8);
         long offsetTableOffset = readInt(data, trailer + 24, 8);
 
+        // ⚠️ 对端可控的长度字段必须全部先校验再分配/寻址：bplist 来自 RTSP 通道，
+        //    调用方只 catch Exception —— OOM 是 Error 会直接逃逸打崩 App。
+        if (offsetIntSize < 1 || offsetIntSize > 8 || objectRefSize < 1 || objectRefSize > 8) {
+            throw new IllegalArgumentException("非法的 offset/ref 宽度: "
+                    + offsetIntSize + "/" + objectRefSize);
+        }
+        if (numObjects < 0 || numObjects > data.length) {
+            throw new IllegalArgumentException("numObjects 越界: " + numObjects);
+        }
+        if (topObject < 0 || topObject >= numObjects) {
+            throw new IllegalArgumentException("topObject 越界: " + topObject);
+        }
+        if (offsetTableOffset < 8 || offsetTableOffset > trailer
+                || offsetTableOffset + numObjects * offsetIntSize > trailer) {
+            throw new IllegalArgumentException("offsetTable 区间越界: off=" + offsetTableOffset);
+        }
+
         long[] offsets = new long[(int) numObjects];
         for (int i = 0; i < numObjects; i++) {
             offsets[i] = readInt(data, (int) offsetTableOffset + i * offsetIntSize, offsetIntSize);
         }
-        return readObject(data, offsets, (int) topObject, objectRefSize, 0);
+        return readObject(data, offsets, (int) topObject, objectRefSize, 0, trailer);
     }
 
-    private static Object readObject(byte[] d, long[] offsets, int index, int refSize, int depth) {
+    private static Object readObject(byte[] d, long[] offsets, int index, int refSize,
+                                     int depth, int limit) {
         if (depth > 64) throw new IllegalArgumentException("plist 嵌套过深");
+        if (index < 0 || index >= offsets.length) {
+            throw new IllegalArgumentException("对象引用越界: " + index);
+        }
         int pos = (int) offsets[index];
+        if (pos < 8 || pos >= limit) {
+            throw new IllegalArgumentException("对象偏移越界: " + pos);
+        }
         int marker = d[pos] & 0xFF;
         int type = marker & 0xF0;
         int nibble = marker & 0x0F;
@@ -233,35 +257,50 @@ public final class Bplist {
             }
             case 0x40: {
                 int size = readSize(d, nibble, cursor);
+                if (size < 0 || size > limit - cursor[0]) {
+                    throw new IllegalArgumentException("data 长度越界: " + size);
+                }
                 byte[] raw = new byte[size];
                 System.arraycopy(d, cursor[0], raw, 0, size);
                 return raw;
             }
             case 0x50: {
                 int size = readSize(d, nibble, cursor);
+                if (size < 0 || size > limit - cursor[0]) {
+                    throw new IllegalArgumentException("ASCII 长度越界: " + size);
+                }
                 return new String(d, cursor[0], size, java.nio.charset.StandardCharsets.ISO_8859_1);
             }
             case 0x60: {
                 int size = readSize(d, nibble, cursor);
+                if (size < 0 || size > (limit - cursor[0]) / 2) {
+                    throw new IllegalArgumentException("UTF-16 长度越界: " + size);
+                }
                 return new String(d, cursor[0], size * 2, java.nio.charset.StandardCharsets.UTF_16BE);
             }
             case 0xA0: {
                 int size = readSize(d, nibble, cursor);
+                if (size < 0 || size > (limit - cursor[0]) / refSize) {
+                    throw new IllegalArgumentException("array 长度越界: " + size);
+                }
                 List<Object> list = new ArrayList<Object>(size);
                 for (int i = 0; i < size; i++) {
                     int ref = (int) readInt(d, cursor[0] + i * refSize, refSize);
-                    list.add(readObject(d, offsets, ref, refSize, depth + 1));
+                    list.add(readObject(d, offsets, ref, refSize, depth + 1, limit));
                 }
                 return list;
             }
             case 0xD0: {
                 int size = readSize(d, nibble, cursor);
+                if (size < 0 || size > (limit - cursor[0]) / (2 * refSize)) {
+                    throw new IllegalArgumentException("dict 长度越界: " + size);
+                }
                 Map<String, Object> map = new LinkedHashMap<String, Object>();
                 for (int i = 0; i < size; i++) {
                     int keyRef = (int) readInt(d, cursor[0] + i * refSize, refSize);
                     int valRef = (int) readInt(d, cursor[0] + (size + i) * refSize, refSize);
-                    Object key = readObject(d, offsets, keyRef, refSize, depth + 1);
-                    Object val = readObject(d, offsets, valRef, refSize, depth + 1);
+                    Object key = readObject(d, offsets, keyRef, refSize, depth + 1, limit);
+                    Object val = readObject(d, offsets, valRef, refSize, depth + 1, limit);
                     map.put(String.valueOf(key), val);
                 }
                 return map;
@@ -313,6 +352,9 @@ public final class Bplist {
     }
 
     private static long readInt(byte[] d, int off, int size) {
+        if (off < 0 || size < 0 || off + size > d.length) {
+            throw new IllegalArgumentException("readInt 越界: off=" + off + " size=" + size);
+        }
         long v = 0;
         for (int i = 0; i < size; i++) {
             v = (v << 8) | (d[off + i] & 0xFFL);

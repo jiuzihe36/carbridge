@@ -33,6 +33,8 @@ public final class MdnsCarPlay {
     private NsdServiceInfo ctrlInfo;
     private NsdManager.RegistrationListener ctrlListener;
     private NsdManager.DiscoveryListener discoveryListener;
+    /** 发现代次：stopDiscovery 时递增，作废在途的 resolve 回调。 */
+    private volatile int discoveryGen;
 
     /** 每轮发现是否已上报过端点（防重复回调起多个会话）。 */
     private volatile boolean endpointReported;
@@ -113,7 +115,11 @@ public final class MdnsCarPlay {
             }
 
             @Override public void onRegistrationFailed(NsdServiceInfo serviceInfo, int errorCode) {
-                listener.onLog("_carplay-ctrl 广播失败 code=" + errorCode);
+                // ⚠️ 注册失败必须自清：否则 ctrlInfo 残留非空，之后所有 advertiseCtrl
+                //    在「已注册」早退处返回 —— _carplay-ctrl 广播永久失效，只能整轮重启。
+                ctrlInfo = null;
+                ctrlListener = null;
+                listener.onLog("_carplay-ctrl 广播失败 code=" + errorCode + "（状态已复位，下次可重试）");
             }
 
             @Override public void onUnregistrationFailed(NsdServiceInfo serviceInfo, int errorCode) {
@@ -123,6 +129,9 @@ public final class MdnsCarPlay {
         try {
             nsd.registerService(info, NsdManager.PROTOCOL_DNS_SD, l);
         } catch (Throwable t) {
+            // 同步抛异常视同注册失败：自清状态（见 onRegistrationFailed）
+            ctrlInfo = null;
+            ctrlListener = null;
             listener.onLog("注册 _carplay-ctrl 异常: " + t);
         }
     }
@@ -186,8 +195,12 @@ public final class MdnsCarPlay {
 
     @SuppressWarnings("deprecation")   // minSdk 26：registerServiceInfoCallback/getHostAddresses 要 API 34
     private void resolve(final NsdServiceInfo found, final String localPrefix) {
+        final int gen = discoveryGen;   // 捕获本轮发现代次
         nsd.resolveService(found, new NsdManager.ResolveListener() {
             @Override public void onServiceResolved(NsdServiceInfo info) {
+                // ⚠️ 代次守卫：stopServiceDiscovery 取消不了已发出的 resolveService，
+                //    迟到的解析结果会把已 stop 的链路复活成幽灵 AirPlay 会话。
+                if (gen != discoveryGen) return;
                 String host = info.getHost() != null ? info.getHost().getHostAddress() : null;
                 int port = info.getPort();
                 if (host == null) {
@@ -230,6 +243,7 @@ public final class MdnsCarPlay {
     }
 
     public void stopDiscovery() {
+        discoveryGen++;   // 本轮在途的 resolve 全部作废（回调里校验代次）
         NsdManager.DiscoveryListener l = discoveryListener;
         discoveryListener = null;
         if (l != null) {

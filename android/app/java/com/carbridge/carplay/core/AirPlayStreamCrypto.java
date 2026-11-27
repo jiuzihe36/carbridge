@@ -110,10 +110,12 @@ public final class AirPlayStreamCrypto {
         return c;
     }
 
-    private byte[] nextNonce() {
+    private synchronized byte[] nextNonce() {
         byte[] n = new byte[NONCE_LEN];
         // ⚠️ 必须从 0 起（对端 frameCounter 是 AtomicLong(0)）：原来 ++counter 从 1 起，
         // 第一帧就和对端错位 → BAD_DECRYPT，整条会话被对端拆掉。
+        // ⚠️ synchronized：读-改-写不是原子的，多线程下会发出重复 nonce（CTR 密钥流
+        //    复用是灾难性的）。当前调用方碰巧都在 videoSendLock 内，这里兜底防未来误用。
         long c = counter++;
         for (int i = 0; i < 8; i++) n[4 + i] = (byte) (c >>> (8 * i));
         return n;
