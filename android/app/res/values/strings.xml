@@ -185,4 +185,6 @@
     <string name="perm_needed_title">需要蓝牙权限</string>
     <string name="perm_go_settings">去设置</string>
     <string name="cancel">取消</string>
+    <string name="car_profile_toggle">按车机记忆连接参数</string>
+    <string name="car_profile_hint">开启后，下次连接按上次那台车机的参数预置（广播版本 srcvers 与画布）。单台车机记录，只读不写当前设置。</string>
 </resources>

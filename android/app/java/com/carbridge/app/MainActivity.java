@@ -85,7 +85,7 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
 
     private final List<String> logLines = new ArrayList<String>();
     private final SimpleDateFormat clock = new SimpleDateFormat("HH:mm:ss", Locale.US);
-    private TextView stateView, detailView, metricsView, logView;
+    private TextView stateView, detailView, logView;
     private TextView btnConnect, logHeader;
     private TextView badgeView, metricFps, metricResolution, metricBitrate;
     private LinearLayout stepsContainer;
@@ -99,7 +99,6 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
     private volatile CarPlayWirelessTx carPlayTx;
     private TextView btnCarPlay;
     private boolean logOpen;
-    private String phoneInfo = "";
     /**
      * Car+ 进度走完后是否还允许自动起 CarPlay 推流（用户要求「无感」：
      * 打开 app → 自动连 Car+ → 走完进度 → CarPlay 自己开始）。
@@ -108,8 +107,6 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
     private boolean autoCarplayArmed = true;
     /** 用户手动点过「停止推流」→ 别自作主张再帮他拉起来。 */
     private boolean carplayManualStop;
-    /** 步骤渲染：所有步骤共用一个容器，按状态着色。 */
-    private final java.util.Map<HuClient.Step, TextView> stepViews = new java.util.EnumMap<HuClient.Step, TextView>(HuClient.Step.class);
     private HuClient.Step currentStep;
     private HuClient.Step failedStep;
     private String failedReason = "";
@@ -128,8 +125,7 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
     private static final int CARLIFE_STEPS = HuClient.Step.values().length;
     private static final int CARPLAY_STEPS = CarPlayWirelessTx.Step.values().length;
     private static final int TOTAL_STEPS = CARLIFE_STEPS + CARPLAY_STEPS;
-    /** 连接流向图。 */
-    private LinkDiagramView linkDiagram;
+    /** 连接流向图控件（未接线时保持 null）。 */
     // ── 底部两页切换 ──
     /** 页面容器：0=连接、1=诊断。 */
     private final View[] pages = new View[2];
@@ -313,6 +309,8 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         }
         showPage(0);
         setupQualitySettings();
+        // 「按车机记忆连接参数」：开了才按上次那台车的 srcvers/画布预置（默认关）。
+        applyCarProfileMemory();
         final View statusDot = findViewById(R.id.dot);
         stateView.setTag(statusDot);
         btnConnect.setOnClickListener(new View.OnClickListener() {
@@ -443,6 +441,8 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
     private static final String KEY_H = "enc_height";
     private static final String KEY_FPS = "fps_index";
     private static final String KEY_AUTO_FIT = "auto_fit";
+    /** 「按车机记忆连接参数」开关（默认关：开启才允许记忆值参与连接，行为可预期）。 */
+    private static final String KEY_CAR_PROFILE_MEMORY = "car_profile_memory";
     private static final String KEY_CAR_W = "car_display_width";
     private static final String KEY_CAR_H = "car_display_height";
     private static final String KEY_CAR_FPS = "car_display_fps";
@@ -465,6 +465,40 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
     private interface OnPick {
         void onPick(int index);
     }
+    /** 「按车机记忆连接参数」开关（设置页画质区）。 */
+    private boolean carProfileMemoryEnabled() {
+        return getSharedPreferences(PREF_NAME, MODE_PRIVATE)
+                .getBoolean(KEY_CAR_PROFILE_MEMORY, false);
+    }
+
+    /**
+     * 按上次那台车机的参数预置（仅当开关开启）：
+     * srcvers 用记忆值（每台车机只认它那一版）；画布只在「还没采到过」时预置，
+     * 车机连上来后 /info 上报值会纠正。开关默认关 → 行为与之前完全一致。
+     */
+    private void applyCarProfileMemory() {
+        if (!carProfileMemoryEnabled()) return;
+        try {
+            com.carbridge.carplay.CarProfileStore.CarProfile p =
+                    com.carbridge.carplay.CarProfileStore.mostRecent(this);
+            if (p == null) return;
+            if (p.srcvers != null && CarPlayCtrlCompat.isValidValue(p.srcvers)
+                    && !p.srcvers.equals(CarPlayCtrlCompat.srcvers(this))) {
+                CarPlayCtrlCompat.setValue(this, p.srcvers);
+                CarPlayCtrlCompat.apply(this);
+                log("按车机记忆恢复 srcvers = " + p.srcvers + "（" + p.mac + "）");
+            }
+            if (p.hasCanvas() && (carW == 0 || carH == 0)) {
+                carW = p.targetW;
+                carH = p.targetH;
+                if (p.targetFps > 0) carFps = p.targetFps;
+                log("按车机记忆预置画布 " + carW + "x" + carH + "@" + carFps + "（" + p.mac + "）");
+            }
+        } catch (Throwable t) {
+            com.carbridge.carplay.util.Diag.w("CarProfile", t);
+        }
+    }
+
     private void setupQualitySettings() {
         SharedPreferences pref = getSharedPreferences(PREF_NAME, MODE_PRIVATE);
         encWidth = clampDim(pref.getInt(KEY_W, DEF_W));
@@ -489,6 +523,22 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                     getSharedPreferences(PREF_NAME, MODE_PRIVATE).edit()
                             .putBoolean(KEY_VERBOSE_TRACE, checked).apply();
                     log(checked ? "详细协议日志：开（逐帧 trace，体积会明显变大）" : "详细协议日志：关");
+                }
+            });
+        }
+        // 「按车机记忆连接参数」开关（默认关）
+        CheckBox swCarProfile = (CheckBox) findViewById(R.id.switch_car_profile);
+        if (swCarProfile != null) {
+            swCarProfile.setChecked(getSharedPreferences(PREF_NAME, MODE_PRIVATE)
+                    .getBoolean(KEY_CAR_PROFILE_MEMORY, false));
+            swCarProfile.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
+                @Override
+                public void onCheckedChanged(android.widget.CompoundButton b, boolean checked) {
+                    getSharedPreferences(PREF_NAME, MODE_PRIVATE).edit()
+                            .putBoolean(KEY_CAR_PROFILE_MEMORY, checked).apply();
+                    log(checked
+                            ? "按车机记忆连接参数：开（下次启动按上次那台车预置 srcvers/画布）"
+                            : "按车机记忆连接参数：关");
                 }
             });
         }
@@ -900,7 +950,7 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
     }
     @Override
     public void onPhoneInfo(final String info) {
-        phoneInfo = info;
+        // 手机型号刻意不显示（投屏中下面挂一串型号名既占地方又没用），接口要求保留回调
     }
     @Override
     public void onMetrics(final int frames, final long bytes, final long firstDelay) {
@@ -962,13 +1012,9 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
 
     private static final int LOG_MEM_CHARS = 120 * 1024;
     private static final int LOG_UI_TAIL = 250;
-    private static final long LOG_FILE_MAX = 1024 * 1024;   // 1 MB：够排查一次会话，滚成 .1 保留上一份
     private static final String LOG_FILE_NAME = "carbridge-session.log";
     /** 逐帧协议日志（默认关）。排查偶发问题才开，开一天能让日志涨十倍。 */
     private static final String KEY_VERBOSE_TRACE = "verbose_trace";
-    private int logChars;
-    private FileOutputStream logFileOut;
-    private boolean logFileTried;
     private final java.util.concurrent.atomic.AtomicBoolean logUiPending =
             new java.util.concurrent.atomic.AtomicBoolean(false);
     /** 已用时：连接中/已连接时每秒刷新，回 idle 时隐藏并清零。 */
@@ -1211,7 +1257,8 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
             p.lastSeenAt = System.currentTimeMillis();
             com.carbridge.carplay.CarProfileStore.save(this, host, p);
             log("已记录车机配置：" + host + " · srcvers=" + p.srcvers
-                    + " · 画布 " + carW + "x" + carH + "@" + carFps);
+                    + " · 画布 " + carW + "x" + carH + "@" + carFps
+                    + (carProfileMemoryEnabled() ? "" : "（开启「按车机记忆」后参与连接）"));
         } catch (Throwable t) {
             com.carbridge.carplay.util.Diag.w("CarProfile", t);
         }
@@ -1877,36 +1924,6 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
             });
         }
     }
-    /** 日志文件句柄的锁：多条业务线程都会写日志，FileOutputStream 不是线程安全的。 */
-    private final Object logFileLock = new Object();
-    private void appendLogFile(String entry) {
-        synchronized (logFileLock) {
-            try {
-                if (logFileOut == null && !logFileTried) {
-                    logFileTried = true;
-                    File f = logFile();
-                    if (f.isFile() && f.length() > LOG_FILE_MAX) {
-                        rotateLogFile(f);
-                    }
-                    logFileOut = new FileOutputStream(f, true);
-                }
-                if (logFileOut != null) {
-                    logFileOut.write((entry + "\n").getBytes("UTF-8"));
-                    logFileOut.flush();
-                }
-            } catch (Throwable t) {
-                // 日志管线绝不能反过来弄挂业务线程。
-                // 但**不能完全静默**：日志文件写不动 = 现场导出的是残缺日志，
-                // 排查会走弯路。这里只打一次 Log（不进会话日志，避免递归）。
-                if (!logFileWarned) {
-                    logFileWarned = true;
-                    android.util.Log.w("carbridge", "写会话日志文件失败: " + t);
-                }
-            }
-        }
-    }
-    /** 日志文件写入失败只提示一次（避免刷屏 + 递归）。 */
-    private boolean logFileWarned;
     /** 关掉日志文件句柄（Activity 销毁时调用，否则每次重建都漏一个 fd）。 */
     private void closeLogFile() {
         if (sessionLog != null) sessionLog.close();
@@ -1916,44 +1933,6 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
      */
     private File logFile() {
         return sessionLog().file();
-    }
-    /**
-     * 轮转：把当前日志改名成 `.1`（覆盖上一份），新日志从空文件开始。
-     * 比原来的「读最后一半再写回去」便宜得多，而且最大占用固定为 2×上限。
-     */
-    private void rotateLogFile(File f) {
-        try {
-            if (logFileOut != null) {
-                try { logFileOut.close(); } catch (Throwable tDiag) { Diag.w("MainActivity.rotateLogFile", tDiag); }
-                logFileOut = null;
-            }
-            File old = new File(f.getParentFile(), LOG_FILE_NAME + ".1");
-            if (old.exists()) old.delete();
-            if (!f.renameTo(old)) {
-                // 改名失败（跨挂载点等）就退回截断
-                truncateLogFileHead(f);
-            }
-        } catch (Throwable t) {
-            android.util.Log.w("carbridge", "日志轮转失败: " + t);
-        }
-    }
-
-    private void truncateLogFileHead(File f) {
-        try {
-            int keep = (int) (LOG_FILE_MAX / 2);
-            java.io.RandomAccessFile raf = new java.io.RandomAccessFile(f, "r");
-            byte[] buf = new byte[keep];
-            raf.seek(f.length() - keep);
-            int n = raf.read(buf);
-            raf.close();
-            FileOutputStream o = new FileOutputStream(f);
-            o.write("...（早期日志已裁剪）\n".getBytes("UTF-8"));
-            if (n > 0) {
-                o.write(buf, 0, n);
-            }
-            o.close();
-        } catch (Throwable tDiag) { com.carbridge.carplay.util.Diag.w("MainActivity", tDiag);
-        }
     }
     /** 分享/复制用：读文件尾部（含历史轮次），文件不在才退回内存。 */
     private String logTailForShare() {
@@ -2618,7 +2597,6 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
     // ------------------------------------------------------------- 页面切换
     /** 切换底部两页，并同步高亮标签。 */
     private void showPage(int index) {
-        currentTab = index;
         // 两页共用同一个 ScrollView：切换时回到顶部，避免停在上一页的滚动位置
         if (mainScroll != null) {
             mainScroll.scrollTo(0, 0);
@@ -2788,7 +2766,6 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         }
         updateProgress(doneCount);
         updateDiagnosis();
-        updateDiagram();
     }
     /**
      * 单步显示状态：判定交给 {@link StepChain}（纯逻辑、有 13 条断言），这里只做「状态 → 文案/颜色」。
@@ -2877,22 +2854,6 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         int pct = (int) (doneCount * 100L / TOTAL_STEPS);
         stepsProgress.setProgress(pct);
         stepsProgressText.setText(doneCount + " / " + TOTAL_STEPS);
-    }
-    /** 更新流向图状态（由 CarLife/CarPlay 综合决定）。 */
-    private void updateDiagram() {
-        if (linkDiagram == null) return;
-        LinkDiagramView.Phase p;
-        if (currentStep == HuClient.Step.STREAMING
-                && carPlayStep == CarPlayWirelessTx.Step.CARPLAY_STREAM) {
-            p = LinkDiagramView.Phase.DONE;
-        } else if (failedStep != null || carPlayFailedStep != null) {
-            p = LinkDiagramView.Phase.ERROR;
-        } else if (currentStep != null || carPlayStep != null) {
-            p = LinkDiagramView.Phase.ACTIVE;
-        } else {
-            p = LinkDiagramView.Phase.IDLE;
-        }
-        linkDiagram.setPhase(p);
     }
     private int dp(float v) {
         return Math.round(v * getResources().getDisplayMetrics().density);
@@ -3039,16 +3000,6 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         long frames = client == null ? 0 : client.frameCount();
         String mbpsText = MetricsText.mbpsText(totalBytes, frames, fpsValue);
         metricBitrate.setText(mbpsText == null ? ph : mbpsText);
-
-        if (metricsView == null) return;
-        String detail = MetricsText.detail(frames, totalBytes, firstFrameDelayMs);
-        if (detail != null) {
-            metricsView.setText(detail);
-            metricsView.setVisibility(View.VISIBLE);
-        } else {
-            metricsView.setText("");
-            metricsView.setVisibility(View.GONE);
-        }
     }
 
     /** 用累计字节/帧数 × 瞬时帧率估码率（Mbps）。 */
