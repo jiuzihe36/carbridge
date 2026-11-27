@@ -163,6 +163,10 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         MainActivity prev = sAlive;
         sAlive = this;
         if (prev != null && prev != this) {
+            // ⚠️ finish() 是异步的：prev 的会话要等它的 onDestroy 才拆，而新实例
+            //    100ms 后就起自己的 tx —— 窗口里两套 iAP2/mDNS 同时存在（时好时坏）。
+            //    两个实例共享同一个主线程，直接同步拆（幂等），overlap 归零。
+            prev.shutdownSessions();
             prev.finish();
         }
         // 自保护：签名钉死 / 反调试 / 反 hook。命中即 halt，所以放在最前面。
@@ -361,12 +365,15 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         ensureBridge();
         // 统一设备身份：iAP2 的 0x4E0C DeviceUUID 与 AirPlay 的 deviceID/macAddress
         // 用**同一个** UUID + 真实蓝牙 MAC（真 iPhone 就是这样）
+        // ⚠️ 先用 peek（缓存/手填，同步零阻塞）设置一次：realBluetoothAddress 的
+        //    resolve 可能走 `su`（最坏 ~1.5s+），在主线程等它就是冷启动卡一下。
+        //    后台 resolve 完再覆盖成更准的值（peek 与真实值一致时结果相同）。
         try {
             com.carbridge.carplay.core.AirPlaySetup.setDeviceIdentity(
-                    com.carbridge.carplay.bt.BtIap2Server.realBluetoothAddress(this));
+                    com.carbridge.carplay.bt.BtIdentity.peek(this).mac);
         } catch (Throwable tDiag) { com.carbridge.carplay.util.Diag.w("MainActivity", tDiag);
         }
-        // 蓝牙地址解析里可能要走一次 `su`（最长 1.5s）。先在后台预热一次，
+        // 蓝牙地址解析里可能要走一次 `su`（最长 1.5s）。后台解析完覆盖 + 记入缓存，
         // 免得 100ms 后的 toggleCarPlay() 在主线程上等它（现场表现是冷启动卡一下）。
         com.carbridge.carplay.util.Bg.run("identity-warm", new Runnable() {
             @Override
@@ -375,6 +382,7 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                     com.carbridge.carplay.bt.BtIdentity.Resolved r =
                             com.carbridge.carplay.bt.BtIdentity.resolve(MainActivity.this, false);
                     if (r.ok()) com.carbridge.carplay.bt.BtIdentity.remember(MainActivity.this, r);
+                    com.carbridge.carplay.core.AirPlaySetup.setDeviceIdentity(r.mac);
                 } catch (Throwable tDiag) {
                     com.carbridge.carplay.util.Diag.w("MainActivity", tDiag);
                 }
@@ -975,6 +983,9 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
             long s = Math.max(0L, System.currentTimeMillis() - busySince) / 1000;
             elapsedView.setText(String.format(java.util.Locale.US, "%d:%02d", s / 60, s % 60));
             elapsedView.setVisibility(View.VISIBLE);
+            // ⚠️ 「卡住 N 秒」的诊断也是计算型文案：每秒跟着重算，否则永远停在
+            //    步骤变化瞬间的数值（≈0s），STALL_MS=8s 的停滞判定永远不出现。
+            updateDiagnosis();
             main.postDelayed(this, 1000);
         }
     };
@@ -1095,12 +1106,20 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         // ⚠️ 不能在主线程做：日志最多 1MB，读 + 压缩 + 写外部存储（FUSE 慢）会卡 UI，
         //    车机热点下出现过明显卡顿。整个导出挪到后台，结果用 main.post 回主线程。
         toastShort("正在导出诊断包…");
+        // ⚠️ 跨线程共享的可变状态必须在主线程**拍快照**：sessionTimeline 是 StringBuilder
+        //    （主线程的 trackState 正在 append），后台读它可能读到半截甚至抛异常。
+        final boolean snapAutoFit = autoFit;
+        final int snapCarW = carW;
+        final int snapCarH = carH;
+        final int snapCarFps = carFps;
+        final String snapTimeline = sessionTimeline.toString();
         com.carbridge.carplay.util.Bg.run("diag-export", new Runnable() {
             @Override
             public void run() {
                 String msg;
                 try {
-                    java.io.File out = writeDiagZip();
+                    java.io.File out = writeDiagZip(snapAutoFit, snapCarW, snapCarH, snapCarFps,
+                            snapTimeline);
                     log("诊断包已导出：" + out.getAbsolutePath());
                     msg = "已导出：" + out.getName();
                 } catch (Throwable t) {
@@ -1119,7 +1138,8 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
     }
 
     /** 真正写 zip（后台线程调用）。 */
-    private java.io.File writeDiagZip() throws java.io.IOException {
+    private java.io.File writeDiagZip(boolean snapAutoFit, int snapCarW, int snapCarH,
+                                        int snapCarFps, String snapTimeline) throws java.io.IOException {
         java.io.File dir = new java.io.File(getExternalFilesDir(null), "diag");
         if (!dir.isDirectory() && !dir.mkdirs()) throw new java.io.IOException("建目录失败 " + dir);
         java.io.File out = new java.io.File(dir,
@@ -1142,10 +1162,10 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
             dev.append("蓝牙名/地址: ").append(BtIdentity.peek(this).mac).append('\n');
             dev.append("车机识别: ").append(CarPlaySdpBeacon.statusLine()).append('\n');
             dev.append("广播版本 srcvers: ").append(CarPlayCtrlCompat.srcvers(this)).append('\n');
-            dev.append("画质自动适配: ").append(autoFit).append(" / 车机画布 ")
-                    .append(carW).append('x').append(carH).append('@').append(carFps).append('\n');
+            dev.append("画质自动适配: ").append(snapAutoFit).append(" / 车机画布 ")
+                    .append(snapCarW).append('x').append(snapCarH).append('@').append(snapCarFps).append('\n');
             dev.append("自动重连: ").append(autoReconnectEnabled()).append('\n');
-            if (sessionTimeline.length() > 0) dev.append("本轮阶段耗时: ").append(sessionTimeline).append('\n');
+            if (snapTimeline.length() > 0) dev.append("本轮阶段耗时: ").append(snapTimeline).append('\n');
             dev.append("静默异常计数: ").append(com.carbridge.carplay.util.Diag.dump()).append('\n');
             put(z, "device.txt", dev.toString());
         }
@@ -1243,6 +1263,28 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         });
     }
 
+    /** 当前打开的对话框引用（退出时统一 dismiss，防 WindowLeaked）。 */
+    private volatile android.app.AlertDialog activeDialog;
+
+    /** 对话框统一出口：Builder.show() 一律走这里，退出时 onDestroy 能 dismiss。 */
+    private android.app.AlertDialog showDialog(AlertDialog.Builder b) {
+        android.app.AlertDialog d = b.show();
+        activeDialog = d;
+        return d;
+    }
+
+    private void dismissActiveDialog() {
+        android.app.AlertDialog d = activeDialog;
+        activeDialog = null;
+        if (d != null) {
+            try {
+                d.dismiss();
+            } catch (Throwable tDiag) {
+                com.carbridge.carplay.util.Diag.w("MainActivity", tDiag);
+            }
+        }
+    }
+
     private void toastShort(String msg) {
         try {
             Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
@@ -1303,7 +1345,7 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         lp.topMargin = dp(12);
         wrap.addView(input, lp);
 
-        new AlertDialog.Builder(this)
+        showDialog(new AlertDialog.Builder(this)
                 .setTitle(R.string.mac_dialog_title)
                 .setView(wrap)
                 .setPositiveButton(android.R.string.ok, new DialogInterface.OnClickListener() {
@@ -1336,14 +1378,24 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                 .setNeutralButton(R.string.mac_dialog_read, new DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(DialogInterface dialog, int which) {
-                        BtIdentity.Resolved r = BtIdentity.resolve(MainActivity.this, true);
-                        BtIdentity.remember(MainActivity.this, r);
-                        log("重新读取本机蓝牙地址：" + r.describe());
-                        refreshIdentity();
+                        // ⚠️ resolve(true) 可能走 su（最长 1.5s）：挪到后台，结果回主线程刷新
+                        com.carbridge.carplay.util.Bg.run("mac-reload", new Runnable() {
+                            @Override public void run() {
+                                final BtIdentity.Resolved r =
+                                        BtIdentity.resolve(MainActivity.this, true);
+                                BtIdentity.remember(MainActivity.this, r);
+                                log("重新读取本机蓝牙地址：" + r.describe());
+                                runOnUiThread(new Runnable() {
+                                    @Override public void run() {
+                                        if (!destroyed) refreshIdentity();
+                                    }
+                                });
+                            }
+                        });
                     }
                 })
                 .setNegativeButton(android.R.string.cancel, null)
-                .show();
+        );
     }
 
     /** 广播版本（mDNS TXT 的 srcvers）：预设三档 + 自定义，改完下次连接生效。 */
@@ -1361,7 +1413,7 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         values.add(null);
         labels.add(getString(R.string.srcvers_custom));
 
-        new AlertDialog.Builder(this)
+        showDialog(new AlertDialog.Builder(this)
                 .setTitle(getString(R.string.srcvers_dialog_title) + " · " + current)
                 .setItems(labels.toArray(new CharSequence[0]), new DialogInterface.OnClickListener() {
                     @Override
@@ -1375,7 +1427,7 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                     }
                 })
                 .setNegativeButton(android.R.string.cancel, null)
-                .show();
+        );
     }
 
     private void showSrcversCustomDialog() {
@@ -1384,7 +1436,7 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         input.setHint("950.7.1");
         input.setTextSize(16);
         input.setText(CarPlayCtrlCompat.srcvers(this));
-        new AlertDialog.Builder(this)
+        showDialog(new AlertDialog.Builder(this)
                 .setTitle(R.string.srcvers_custom_title)
                 .setMessage(R.string.srcvers_custom_hint)
                 .setView(input)
@@ -1395,7 +1447,7 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                     }
                 })
                 .setNegativeButton(android.R.string.cancel, null)
-                .show();
+        );
     }
 
     /** 写入广播版本：校验 → 落盘 → 同步到 RTSP UA / SETUP sourceVersion。 */
@@ -1439,7 +1491,7 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
             // 已经清过配对、只是还没和车机重配上 —— 这一步不该是死路：
             // 直接把「让车机发现本机」的窗口打开（蓝牙设置页 = 可被发现）
             log("• 现在没有已配对的车机：打开蓝牙设置页，等车机来搜本机");
-            new AlertDialog.Builder(this)
+            showDialog(new AlertDialog.Builder(this)
                     .setTitle(R.string.btn_repair)
                     .setMessage(R.string.repair_no_car_msg)
                     .setPositiveButton(R.string.repair_open_bt, new DialogInterface.OnClickListener() {
@@ -1449,7 +1501,7 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                         }
                     })
                     .setNegativeButton(R.string.repair_cancel, null)
-                    .show();
+        );
             return;
         }
         String carName = null;
@@ -1459,7 +1511,7 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
             Diag.w("MainActivity.showRepairDialog", tDiag);
         }
         if (carName == null || carName.length() == 0) carName = car.getAddress();
-        new AlertDialog.Builder(this)
+        showDialog(new AlertDialog.Builder(this)
                 .setTitle(R.string.btn_repair)
                 .setMessage(getString(R.string.repair_msg, carName))
                 .setPositiveButton(R.string.repair_ok, new DialogInterface.OnClickListener() {
@@ -1469,7 +1521,7 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                     }
                 })
                 .setNegativeButton(R.string.repair_cancel, null)
-                .show();
+        );
     }
 
     /** 真正执行：清手机侧配对 → 打开蓝牙设置页（进入可被发现窗口）。 */
@@ -1665,7 +1717,7 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
             labels.add((isLikelyCar(d) ? "🚗 " : "") + (name == null ? "(无名)" : name)
                     + "  " + addr);
         }
-        new AlertDialog.Builder(this)
+        showDialog(new AlertDialog.Builder(this)
                 .setTitle(R.string.pair_scan_pick)
                 .setItems(labels.toArray(new CharSequence[0]), new DialogInterface.OnClickListener() {
                     @Override
@@ -1674,7 +1726,7 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                     }
                 })
                 .setNegativeButton(R.string.repair_cancel, null)
-                .show();
+        );
     }
 
     /** 粗略判「这像不像车机」：名字带车机特征，或 CoD 是车载音频。 */
@@ -1735,7 +1787,7 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
      * 不需要在车机屏幕上点「允许调试」。
      */
     private void showCarSideDialog() {
-        new AlertDialog.Builder(this)
+        showDialog(new AlertDialog.Builder(this)
                 .setTitle(R.string.btn_car_side)
                 .setMessage(R.string.car_side_msg)
                 .setPositiveButton(R.string.car_side_run, new DialogInterface.OnClickListener() {
@@ -1745,24 +1797,31 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                     }
                 })
                 .setNegativeButton(R.string.repair_cancel, null)
-                .show();
+        );
     }
 
     /** 后台跑车机侧流程：扫网段 → adb 连接 → 写属性 → 重启车机 CarPlay 应用。 */
     private void runCarSideSetup() {
-        final String mac = com.carbridge.carplay.bt.BtIdentity.peek(this).ok()
-                ? com.carbridge.carplay.bt.BtIdentity.peek(this).mac
-                : com.carbridge.carplay.bt.BtIdentity.resolve(this, false).mac;
-        if (mac == null) {
-            Toast.makeText(this, "读不到本机蓝牙地址", Toast.LENGTH_LONG).show();
-            return;
-        }
         Toast.makeText(this, R.string.car_side_running, Toast.LENGTH_LONG).show();
         log("── 车机一键解锁（免电脑）──");
-        log("本机蓝牙 MAC：" + mac);
         com.carbridge.carplay.util.Bg.run("car-side", new Runnable() {
             @Override
             public void run() {
+                // ⚠️ resolve 可能走 su（最长 1.5s）：必须在后台线程做 —— 以前在
+                //    点击回调的主线程里跑，冷缓存时 UI 冻结。
+                final String mac = com.carbridge.carplay.bt.BtIdentity.peek(MainActivity.this).ok()
+                        ? com.carbridge.carplay.bt.BtIdentity.peek(MainActivity.this).mac
+                        : com.carbridge.carplay.bt.BtIdentity.resolve(MainActivity.this, false).mac;
+                if (mac == null) {
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            Toast.makeText(MainActivity.this, "读不到本机蓝牙地址",
+                                    Toast.LENGTH_LONG).show();
+                        }
+                    });
+                    return;
+                }
+                log("本机蓝牙 MAC：" + mac);
                 final com.carbridge.car.CarSideSetup.Result r =
                         com.carbridge.car.CarSideSetup.run(MainActivity.this, mac,
                                 new com.carbridge.car.CarSideSetup.Log() {
@@ -2152,7 +2211,7 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
     private void showPermissionSettingsDialog(String msg) {
         if (destroyed || isFinishing()) return;
         try {
-            new AlertDialog.Builder(this)
+            showDialog(new AlertDialog.Builder(this)
                     .setTitle(R.string.perm_needed_title)
                     .setMessage(msg)
                     .setPositiveButton(R.string.perm_go_settings, new DialogInterface.OnClickListener() {
@@ -2168,7 +2227,7 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                         }
                     })
                     .setNegativeButton(R.string.cancel, null)
-                    .show();
+        );
         } catch (Throwable tDiag) {
             com.carbridge.carplay.util.Diag.w("MainActivity.permDialog", tDiag);
         }
@@ -3119,9 +3178,27 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         main.removeCallbacksAndMessages(null);
         reconnectRunnable = null;
         autoConnectOnce = null;
+        // 打开的对话框跟着销毁：不 dismiss 会 WindowLeaked，部分 ROM 直接崩
+        dismissActiveDialog();
         if (sAlive == this) {
             sAlive = null;
         }
+        shutdownSessions();
+        if (bondReceiver != null) {
+            try {
+                unregisterReceiver(bondReceiver);
+            } catch (Throwable tDiag) { com.carbridge.carplay.util.Diag.w("MainActivity", tDiag);
+            }
+            bondReceiver = null;
+        }
+        // 关掉日志文件句柄：Activity 每重建一次就漏一个 fd
+        closeLogFile();
+        super.onDestroy();
+    }
+
+    /** 同步拆掉两条会话并停保活（幂等）。onDestroy 与「旧实例让位」共用——
+     *  双实例切换时新实例用它保证旧会话**立即**消失，不等异步的 finish()/onDestroy。 */
+    void shutdownSessions() {
         if (client != null) {
             client.stop();
         }
@@ -3136,15 +3213,5 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         // 会话都拆完了：保活（前台服务 + 三把锁 + 常驻通知）没有服务对象了，必须停。
         // SDP 信标是 SdpBeaconService 的事，不受影响（车机识别靠它，不能停）。
         KeepAliveService.stop(this);
-        if (bondReceiver != null) {
-            try {
-                unregisterReceiver(bondReceiver);
-            } catch (Throwable tDiag) { com.carbridge.carplay.util.Diag.w("MainActivity", tDiag);
-            }
-            bondReceiver = null;
-        }
-        // 关掉日志文件句柄：Activity 每重建一次就漏一个 fd
-        closeLogFile();
-        super.onDestroy();
     }
 }
