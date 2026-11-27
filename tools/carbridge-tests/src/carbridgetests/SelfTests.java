@@ -945,6 +945,33 @@ public final class SelfTests {
         check(com.carbridge.carplay.core.HidDescriptor.touchReportId(descNoId) == 0,
                 "没有 Report ID 时返回 0");
 
+        // 联合声明：Usage(X), Usage(Y), 一条 Input（真车常见写法）——两轴都要拿到
+        byte[] descJoint = new byte[]{
+                0x05, 0x0D, 0x09, 0x22, (byte) 0xA1, 0x01,
+                0x09, 0x30, 0x09, 0x31,     // Usage(X), Usage(Y) 同一条主项
+                0x15, 0x00, 0x26, (byte) 0xFF, 0x0F,
+                0x75, 0x10, (byte) 0x95, 0x02,   // size16 × count2
+                (byte) 0x81, 0x02,
+                (byte) 0xC0
+        };
+        int[] joint = com.carbridge.carplay.core.HidDescriptor.touchAxisMaxima(descJoint);
+        check(joint != null && joint[0] == 4095 && joint[1] == 4095,
+                "联合 X/Y 一条主项 → 两轴上限都拿到（第 15 批修复）");
+
+        // Usage 数组声明（Contact Count 这类）不得污染轴上限兜底
+        byte[] descRange = new byte[]{
+                0x05, 0x0D, 0x09, 0x22, (byte) 0xA1, 0x01,
+                0x09, 0x30, 0x15, 0x00, 0x26, (byte) 0xFF, 0x0F,
+                0x75, 0x10, (byte) 0x95, 0x01, (byte) 0x81, 0x02,   // X 4095
+                0x19, 0x51, 0x29, 0x51,                              // UsageMin/Max 数组
+                0x15, 0x00, 0x25, 0x0A,
+                0x75, 0x08, (byte) 0x95, 0x01, (byte) 0x81, 0x02,   // max=10 的数组字段
+                (byte) 0xC0
+        };
+        int[] rangeAx = com.carbridge.carplay.core.HidDescriptor.touchAxisMaxima(descRange);
+        check(rangeAx != null && rangeAx[0] == 4095 && rangeAx[1] == 4095,
+                "Usage 数组字段不参与轴上限（10 不会顶掉 4095）");
+
         // 带 ID 的单指报告：[ID, 按下, X_lo, X_hi, Y_lo, Y_hi]
         byte[] withId = new byte[]{0x05, 0x01, (byte) 0xE8, 0x03, (byte) 0xF4, 0x01}; // x=1000 y=500
         com.carbridge.carplay.core.HidInput.Touch t =

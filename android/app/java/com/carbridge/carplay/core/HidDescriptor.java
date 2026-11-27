@@ -41,7 +41,11 @@ public final class HidDescriptor {
     /** 一个 Input 主项解析出来的字段。 */
     public static final class Field {
         public final int usagePage;
+        /** 本主项声明的第一个 Usage（兼容旧调用方）。 */
         public final int usage;
+        /** 本主项声明的**全部** Usage：真车描述符常见「Usage(X), Usage(Y), Input」
+         *  一条主项带两个用途，只留最后一个会把 X 丢掉（轴上限退化成 {y,y}）。 */
+        public final int[] usages;
         public final int usageMin;
         public final int usageMax;
         public final int logicalMin;
@@ -50,10 +54,11 @@ public final class HidDescriptor {
         public final int reportSize;
         public final int reportCount;
 
-        Field(int usagePage, int usage, int usageMin, int usageMax,
+        Field(int usagePage, int usage, int[] usages, int usageMin, int usageMax,
               int logicalMin, int logicalMax, int reportId, int reportSize, int reportCount) {
             this.usagePage = usagePage;
             this.usage = usage;
+            this.usages = usages != null ? usages : new int[0];
             this.usageMin = usageMin;
             this.usageMax = usageMax;
             this.logicalMin = logicalMin;
@@ -61,6 +66,19 @@ public final class HidDescriptor {
             this.reportId = reportId;
             this.reportSize = reportSize;
             this.reportCount = reportCount;
+        }
+
+        /** 本主项是否包含某用途（含单 Usage 与 Usage 列表两种声明）。 */
+        public boolean hasUsage(int u) {
+            for (int x : usages) {
+                if (x == u) return true;
+            }
+            return false;
+        }
+
+        /** Usage Minimum/Maximum 数组声明（Contact Count 这类），不是坐标轴。 */
+        public boolean isUsageRange() {
+            return usageMin != 0 || usageMax != 0;
         }
 
         @Override
@@ -79,6 +97,7 @@ public final class HidDescriptor {
 
         int usagePage = 0, logicalMin = 0, logicalMax = 0, reportSize = 0, reportId = 0, reportCount = 0;
         int usage = 0, usageMin = 0, usageMax = 0;
+        List<Integer> usageList = new ArrayList<Integer>();
         int pos = 0;
 
         while (pos < d.length) {
@@ -114,18 +133,24 @@ public final class HidDescriptor {
                 }
             } else if (type == TYPE_LOCAL) {
                 switch (tag) {
-                    case (USAGE >> 4): usage = (int) value; break;
+                    case (USAGE >> 4):
+                        usage = (int) value;
+                        if (!usageList.contains((int) value)) usageList.add((int) value);
+                        break;
                     case (USAGE_MIN >> 4): usageMin = (int) value; break;
                     case (USAGE_MAX >> 4): usageMax = (int) value; break;
                     default: break;
                 }
             } else if (type == TYPE_MAIN) {
                 if (tag == (INPUT >> 4)) {
-                    out.add(new Field(usagePage, usage, usageMin, usageMax,
+                    int[] us = new int[usageList.size()];
+                    for (int i = 0; i < us.length; i++) us[i] = usageList.get(i);
+                    out.add(new Field(usagePage, usage, us, usageMin, usageMax,
                             logicalMin, logicalMax, reportId, reportSize, reportCount));
                 }
                 // Local 作用域在主项后清空
                 usage = usageMin = usageMax = 0;
+                usageList.clear();
             }
         }
         return out;
@@ -150,13 +175,17 @@ public final class HidDescriptor {
      */
     public static int touchReportId(byte[] descriptor) {
         for (Field f : parseInputs(descriptor)) {
-            if ((f.usage == 0x30 || f.usage == 0x31) && f.reportId > 0) return f.reportId;
+            if ((f.hasUsage(0x30) || f.hasUsage(0x31)) && f.reportId > 0) return f.reportId;
         }
         return 0;
     }
 
-        /**
+    /**
      * 触摸屏的 (maxX, maxY) 逻辑上限。
+     *
+     * <p>判定按 usage 列表而不是单 usage（「Usage(X), Usage(Y), Input」一条主项
+     * 带两轴是常见写法）；Usage 数组声明（Contact Count 之类）不参与轴上限兜底，
+     * 否则它的小上限（如 10）会被当成轴的逻辑上限。
      */
     public static int[] touchAxisMaxima(byte[] descriptor) {
         List<Field> fields = parseInputs(descriptor);
@@ -165,11 +194,11 @@ public final class HidDescriptor {
         Set<Integer> others = new LinkedHashSet<Integer>();
         for (Field f : fields) {
             if (f.logicalMax <= 1) continue;   // Tip Switch、常量填充等
-            if (f.usage == 0x30) {
+            if (f.hasUsage(0x30)) {
                 x = f.logicalMax;
-            } else if (f.usage == 0x31) {
+            } else if (f.hasUsage(0x31)) {
                 y = f.logicalMax;
-            } else {
+            } else if (!f.isUsageRange()) {
                 others.add(f.logicalMax);
             }
         }
