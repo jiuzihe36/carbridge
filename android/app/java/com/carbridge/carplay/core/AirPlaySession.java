@@ -82,6 +82,10 @@ public final class AirPlaySession {
     /** 按时间限流的类型日志：上次打印时刻与累计条数。 */
     private long lastTypeLogMs;
     private int typeCount;
+    /** changeModes 乒乓限流：同一 params 签名 2 秒内不重复回 modesChanged。 */
+    private volatile String lastChangeModesSig;
+    private volatile long lastChangeModesAtMs;
+    private int changeModesSuppressed;
     /** 视频通道（会话线程建立，视频线程用）—— 必须 volatile，否则视频线程可能永远看到 null。 */
     private volatile Socket videoChannel;
 
@@ -156,6 +160,11 @@ public final class AirPlaySession {
     private volatile long videoWriteStartMs;
     /** 最近一次视频通道写完的时刻（诊断用）。 */
     private volatile long lastVideoPacketAtMs;
+    /** 控制/事件通道写开始时刻（同 videoWriteStartMs：Java socket 写没有超时，
+     *  车机不读控制通道时 out.write 会持 controlLock 永久阻塞 —— /feedback 停发、
+     *  changeModes 回发堵死；看门狗超时关通道让阻塞写抛异常走重连）。 */
+    private volatile long controlWriteStartMs;
+    private volatile long eventWriteStartMs;
     /**
      * 新流先等一个 IDR 关键帧再开始推。
      *
@@ -331,6 +340,23 @@ public final class AirPlaySession {
                     if (s == State.ERROR || s == State.CLOSED) {
                         continue;
                     }
+                    // 控制/事件通道写阻塞自愈（任何状态都查：SETUP 期也可能卡）：
+                    // 超时关通道，让阻塞的 write 抛异常走既有重连分支。
+                    long cws = controlWriteStartMs;
+                    if (cws > 0 && System.currentTimeMillis() - cws > 8000) {
+                        log("⚠ 控制通道写阻塞 " + (System.currentTimeMillis() - cws)
+                                + "ms（车机不读）→ 关闭控制通道，让会话重连");
+                        closeQuietly(control);
+                        controlPlain = null;
+                        controlWriteStartMs = 0;
+                    }
+                    long ews = eventWriteStartMs;
+                    if (ews > 0 && System.currentTimeMillis() - ews > 8000) {
+                        log("⚠ 事件通道写阻塞 " + (System.currentTimeMillis() - ews)
+                                + "ms（车机不读）→ 关闭事件通道（触摸本会话停用，画面继续）");
+                        closeQuietly(eventChannel);
+                        eventWriteStartMs = 0;
+                    }
                     if (s == State.STREAMING) {
                         // 写阻塞自愈：超过 2 秒还没写完 → 车机那头不读了。
                         // 关掉视频通道让阻塞的 write 抛异常，run()/心跳按既有分支重建会话。
@@ -389,6 +415,11 @@ public final class AirPlaySession {
         //    它的 catch 以前会无条件 setState(ERROR) —— 用户手动断开就被上报成故障，
         //    上层收到 onAirPlayFailed 会重发 0x5702，把刚被断开的车机又拉起重连。
         setState(State.CLOSED);
+        closeAllResources();
+    }
+
+    /** 关闭本轮打开的全部 socket/编码器（不触碰状态机）。stop() 与失败清理共用。 */
+    private void closeAllResources() {
         closeQuietly(control);
         // 同实例再 start() 时不能沿用上一轮的解密流（它绑在旧 socket 上）
         controlPlain = null;
@@ -512,6 +543,12 @@ public final class AirPlaySession {
                 log("AirPlay 会话失败: " + t);
                 setState(State.ERROR);
             }
+            // ⚠️ 失败也要把已经打开的资源关掉：否则 control 保持 ESTABLISHED、
+            //    timing 线程继续应答 —— 车机看到「半活会话」可能不再重新邀请，
+            //    而且 running 恒 true 会把同实例的再次 start() 挡死（if (running) return）。
+            running = false;
+            if (CURRENT == this) CURRENT = null;
+            closeAllResources();
         }
     }
 
@@ -528,7 +565,10 @@ public final class AirPlaySession {
                     DatagramPacket p = new DatagramPacket(buf, buf.length);
                     try {
                         s.receive(p);
-                        if (TimingResponder.isTimingRequest(buf)) {
+                        // ⚠️ 必须先看真实包长：isTimingRequest 检查的是 128B 固定缓冲，
+                        //    一个 <32B 的短垃圾包（扫描包）也能过 buf 检查，然后 reply()
+                        //    在 readLongBE(24) 上抛 AIOOBE —— 一条扫描包就把 timing 线程打死。
+                        if (p.getLength() >= 32 && TimingResponder.isTimingRequest(buf)) {
                             byte[] req = new byte[p.getLength()];
                             System.arraycopy(buf, 0, req, 0, p.getLength());
                             // ⚠️ 用 TimingResponder（已按 RFC 3550 的 NTP 32.32 算好），
@@ -540,8 +580,12 @@ public final class AirPlaySession {
                             s.send(new DatagramPacket(rep, rep.length, p.getAddress(), p.getPort()));
                         }
                     } catch (Exception e) {
-                        if (running) log("timing 响应失败: " + e);
-                        break;
+                        // socket 已关（stop 触发的收包失败）才退出；包级异常丢弃该包继续应答，
+                        // 时钟应答一停车机就会失去同步。
+                        if (!running || s == null || s.isClosed()) {
+                            break;
+                        }
+                        log("timing 响应失败（丢弃该包，继续应答）: " + e);
                     }
                 }
             }
@@ -751,6 +795,9 @@ public final class AirPlaySession {
 
     private byte[] setup() throws IOException {
         Map<String, Object> body = new LinkedHashMap<String, Object>();
+        // ⚠️ 版本号三处同源：SOURCE_VERSION 是 volatile（界面可切广播版本），
+        //    同一条 SETUP 必须快照一次再复用，不能分三次读把自己报成两个版本。
+        final String sourceVersion = AirPlaySetup.SOURCE_VERSION;
         // ⚠️ deviceID 与 macAddress 必须是**真 iPhone 的那一对**：
         //    deviceID = UUID 形式、macAddress = 真实蓝牙 MAC，
         //    且与 iAP2 的 0x4E0C DeviceUUID 是**同一个** UUID ✓（见 AirPlaySetup.deviceIdFromMac）。
@@ -762,7 +809,7 @@ public final class AirPlaySession {
         body.put("osName", AirPlaySetup.OS_NAME);
         body.put("osVersion", AirPlaySetup.OS_VERSION);
         body.put("osBuildVersion", AirPlaySetup.OS_BUILD_VERSION);
-        body.put("sourceVersion", AirPlaySetup.SOURCE_VERSION);
+        body.put("sourceVersion", sourceVersion);
         body.put("sessionUUID", sessionUuid);
         body.put("sessionCorrelationUUID", sessionUuid);
         body.put("timingPort", (long) timingSocket.getLocalPort());
@@ -791,13 +838,13 @@ public final class AirPlaySession {
         body.put("features", featuresList());
         // 下面几个是车机 key 表里有、而我们没发的（真 iPhone 都会带）
         body.put("manufacturer", "Apple Inc.");
-        body.put("srcvers", AirPlaySetup.SOURCE_VERSION);
+        body.put("srcvers", sourceVersion);
         body.put("statusFlags", 0L);
         body.put("firmwareRevision", "1.0");
         body.put("hardwareRevision", "1.0");
         body.put("extendedFeatures", AirPlaySetup.Features.full()[1]);
         body.put("limitedUI", Boolean.FALSE);
-        body.put("vv", AirPlaySetup.SOURCE_VERSION);
+        body.put("vv", sourceVersion);
         byte[] bodyBytes = Bplist.write(body);
         log("SETUP body 就绪 " + bodyBytes.length + "B paired=" + paired
                 + " features=" + Long.toHexString(AirPlaySetup.Features.full()[0]));
@@ -810,6 +857,8 @@ public final class AirPlaySession {
     private void announce() {
         try {
             Map<String, Object> body = new LinkedHashMap<String, Object>();
+            // 同 setup()：一条报文内版本号必须同源（快照一次再复用）
+            final String sourceVersion = AirPlaySetup.SOURCE_VERSION;
             body.put("deviceID", AirPlaySetup.deviceId());
             body.put("macAddress", setupMacAddress());
             body.put("model", AirPlaySetup.MODEL);
@@ -818,8 +867,8 @@ public final class AirPlaySession {
             body.put("osName", AirPlaySetup.OS_NAME);
             body.put("osVersion", AirPlaySetup.OS_VERSION);
             body.put("osBuildVersion", AirPlaySetup.OS_BUILD_VERSION);
-            body.put("sourceVersion", AirPlaySetup.SOURCE_VERSION);
-            body.put("srcvers", AirPlaySetup.SOURCE_VERSION);
+            body.put("sourceVersion", sourceVersion);
+            body.put("srcvers", sourceVersion);
             body.put("protovers", 1L);
             body.put("statusFlags", 0L);
             body.put("features", featuresList());
@@ -1918,13 +1967,21 @@ public final class AirPlaySession {
                 }
                 // ⚠️ 车机命令必须走事件通道 socket（独立 CSeq），且必须每条都回 200
                 OutputStream out = s.getOutputStream();
-                byte[] resp = ("RTSP/1.0 200 OK\r\nCSeq: " + cseq + "\r\n\r\n").getBytes("US-ASCII");
+                // 对端没带 CSeq（或解析失败）时不能回字面 `CSeq: -1`，省略该头
+                byte[] resp = (cseq >= 0
+                        ? "RTSP/1.0 200 OK\r\nCSeq: " + cseq + "\r\n\r\n"
+                        : "RTSP/1.0 200 OK\r\n\r\n").getBytes("US-ASCII");
                 ControlCipher writeCipher = eventWriteCipher;
                 if (writeCipher != null) {
                     resp = writeCipher.encrypt(resp);   // 对端按密文读，明文 200 它解不开
                 }
-                out.write(resp);
-                out.flush();
+                eventWriteStartMs = System.currentTimeMillis();
+                try {
+                    out.write(resp);
+                    out.flush();
+                } finally {
+                    eventWriteStartMs = 0;
+                }
                 if (eventRxLogged < 20) {
                     log("事件循环: 已回 200 cseq=" + cseq + " resp=" + resp.length + "B");
                 }
@@ -1959,21 +2016,53 @@ public final class AirPlaySession {
                             // 所以这里不会阻塞后续 /command 的应答。
                             handleHid(m);
                         } else if ("changeModes".equals(type)) {
-                            // ⚠️ sendModesChanged() 要走控制通道（最长 8s 超时）。
-                            //    在事件线程里同步做，会把后续触摸应答全堵住；挪到独立线程。
+                            // params 是车机想要的资源分配。我们只支持「屏/音频归手机」，
+                            // 但车机坚持请求时无条件顶回会形成 changeModes↔modesChanged 乒乓 ——
+                            // 同一签名 2 秒内不重复回（正常路径不受影响，风暴被掐掉）。
+                            final String sig = String.valueOf(m.get("params"));
+                            final long cmNowMs = System.currentTimeMillis();
+                            boolean dup = sig.equals(lastChangeModesSig)
+                                    && (cmNowMs - lastChangeModesAtMs) < 2000;
+                            if (dup) {
+                                changeModesSuppressed++;
+                            } else {
+                                lastChangeModesSig = sig;
+                                lastChangeModesAtMs = cmNowMs;
+                                log("changeModes params=" + sig
+                                        + (changeModesSuppressed > 0
+                                                ? ("（其间忽略重复 " + changeModesSuppressed + " 条）") : ""));
+                                changeModesSuppressed = 0;
+                                // ⚠️ sendModesChanged() 要走控制通道（最长 8s 超时）。
+                                //    在事件线程里同步做，会把后续触摸应答全堵住；挪到独立线程。
+                                fireAndForget(new Runnable() {
+                                    @Override public void run() {
+                                        try {
+                                            sendModesChanged();
+                                        } catch (java.io.IOException e) {
+                                            log("changeModes 回发失败: " + e);
+                                        }
+                                    }
+                                });
+                            }
+                        } else if ("forceKeyFrame".equals(type)) {
+                            // 车机解码器失步要关键帧：置回等待位，让下一个 IDR 先补
+                            // OP_VIDEO_CONFIG 再推帧 —— 否则黑屏/花屏要等到下一个自然 IDR。
+                            configDirty = true;
+                            waitingForKeyFrame = true;
+                            log("车机要求关键帧 → 等下一个 IDR（先补 OP_VIDEO_CONFIG）");
+                        } else if ("requestUI".equals(type)) {
+                            // requestUI = 车机请求显示投射界面。我们的资源归属恒为「归手机」，
+                            // 按 changeModes 同款回应 modesChanged 重申（声明了 UI_CONTEXT 就要有实现）。
+                            log("车机 requestUI → 重申资源归手机（modesChanged）");
                             fireAndForget(new Runnable() {
                                 @Override public void run() {
                                     try {
                                         sendModesChanged();
                                     } catch (java.io.IOException e) {
-                                        log("changeModes 回发失败: " + e);
+                                        log("requestUI 回发失败: " + e);
                                     }
                                 }
                             });
-                        } else if ("forceKeyFrame".equals(type)) {
-                            log("车机要求关键帧");
-                        } else if ("requestUI".equals(type)) {
-                            log("车机 requestUI");
                         }
                     } else if (eventRxLogged < 8) {
                         eventRxLogged++;
@@ -2176,8 +2265,13 @@ public final class AirPlaySession {
                 throw new IOException("控制通道加密失败: " + e);
             }
         }
-        out.write(wire);
-        out.flush();
+        controlWriteStartMs = System.currentTimeMillis();
+        try {
+            out.write(wire);
+            out.flush();
+        } finally {
+            controlWriteStartMs = 0;
+        }
 
         // 3) 响应：配对后同样是整条密文，边读边解出明文再解析
         RtspMessage.Response r = readControlResponseFor(thisCseq, method + " " + path);
@@ -2403,6 +2497,11 @@ public final class AirPlaySession {
                 return new String(arr, 0, n, "US-ASCII");
             }
             b.write(c);
+            // ⚠️ 单行上限：密钥协商失败退回明文读密文、或对端只发字节不发换行时，
+            //    没有这个上限缓冲只增不减直至 OOM（控制通道 RtspMessage.readLine 有同款）。
+            if (b.size() > 64 * 1024) {
+                throw new IOException("事件通道头行超过 64KB，流已错位");
+            }
         }
         return b.size() == 0 ? null : new String(b.toByteArray(), "US-ASCII");
     }

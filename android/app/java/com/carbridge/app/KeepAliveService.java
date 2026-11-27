@@ -31,10 +31,22 @@ public final class KeepAliveService extends Service {
     public static void start(Context ctx) {
         Intent i = new Intent(ctx, KeepAliveService.class);
         // Android 8+ 必须用 startForegroundService，且要在 5 秒内 startForeground
-        if (Build.VERSION.SDK_INT >= 26) {
-            ctx.startForegroundService(i);
-        } else {
-            ctx.startService(i);
+        try {
+            if (Build.VERSION.SDK_INT >= 26) {
+                ctx.startForegroundService(i);
+            } else {
+                ctx.startService(i);
+            }
+        } catch (Throwable t) {
+            // Android 12+ 禁止从后台启动前台服务（onState 回调/广播等后台上下文会撞）。
+            // 退化为普通服务：onCreate 里照样 startForeground()，效果一样；
+            // 仍失败只记日志 —— 下次回到前台时调用方会再试，不能让这里把 App 带崩。
+            android.util.Log.w("carbridge", "保活服务前台启动被拒（后台限制）→ 退化为普通服务：" + t);
+            try {
+                ctx.startService(new Intent(ctx, KeepAliveService.class));
+            } catch (Throwable t2) {
+                android.util.Log.w("carbridge", "启动保活服务失败：" + t2);
+            }
         }
     }
 
