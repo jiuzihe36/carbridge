@@ -2183,10 +2183,17 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                     log("✓ 蓝牙配对成功：" + who
                             + "（" + describeBond(prev) + " → BONDED）");
                     if (beacon) {
-                        log("  信标在配对时是挂着的 → 车机已把 "
+                        // ⚠️ 这只能断言「信标当时在跑」，不能断言车机真的重读了 SDP：
+                        //    车机眼里这是「新配对」还是「旧配对重新连上」我们看不到 ——
+                        //    旧配对重连时车机可能直接用旧缓存（实测踩过：配对成功但就是不认）。
+                        //    所以必须给出验收信号，别替车机下结论。
+                        log("  信标在配对时是挂着的，车机这次应当学到 "
                                 + CarProfile.APPLE_DEVICE_EIR_UUID + " + "
-                                + CarProfile.APPLE_IAP2_UUID + " 记进它的 SDP 缓存");
-                        log("  下一步：车机桌面点「Apple CarPlay」（灰色也能点），等它回连本机");
+                                + CarProfile.APPLE_IAP2_UUID);
+                        log("  验收：车机蓝牙列表里本机名字下应出现「(支持无线 CarPlay 连接)」小字");
+                        log("  没出现 = 车机没重读（它那边还留着旧配对）→ 车机上删掉本机、"
+                                + "列表里看不到本机后，再配一次");
+                        log("  出现了再点「Apple CarPlay」（灰色也能点），等它回连本机");
                     } else {
                         log("  ✗ 但配对时信标**没在跑** → 车机这次很可能没学到那两条 UUID！");
                         log("  处理：车机蓝牙里删掉本机 → App 里点「重新配对车机」→ 再配一次");
