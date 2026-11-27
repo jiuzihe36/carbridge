@@ -328,6 +328,14 @@ public final class SelfTests {
                 "畸形长度 DER → certValidity 返回 null 而非抛异常");
         check(MfiCrypto.certValidity(new byte[]{0x17, 0x05, '2', '0'}) == null,
                 "截断 UTCTime → return null");
+
+        // P-384/521 曲线必须不解析（解析成功也永远验不过，静默失败更糟）
+        KeyPairGenerator g384 = KeyPairGenerator.getInstance("EC");
+        g384.initialize(new java.security.spec.ECGenParameterSpec("secp384r1"));
+        byte[] spki384 = g384.generateKeyPair().getPublic().getEncoded();
+        check(MfiCrypto.parseEcPublicKey(spki384) == null,
+                "P-384 SPKI → parseEcPublicKey 返回 null（第 11 批修复）");
+        check(MfiCrypto.parseEcPublicKey(spki) != null, "P-256 SPKI 正常解析（回归）");
     }
 
     /** 构造一份「SHA-1 DigestInfo + PKCS#1 填充」的 EM（供 e=1 伪造测试用）。 */

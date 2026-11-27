@@ -156,6 +156,14 @@ public final class MfiCrypto {
                 try {
                     byte[] spki = new byte[len.valueEnd - back];
                     System.arraycopy(der, back, spki, 0, spki.length);
+                    // ⚠️ 只接受 P-256：MFi 的 EC 身份就是 secp256r1。P-384/521 也能
+                    //    解析成 EC PublicKey，但我们的验签只吃 SHA-256/1 —— 高位曲线
+                    //    签名必然验不过（严格模式静默卡死且看不出原因）。
+                    if (!spkiContainsOid(spki, OID_P256)) {
+                        com.carbridge.carplay.util.Diag.w("MfiCrypto",
+                                new IllegalStateException("跳过非 P-256 曲线 SPKI（MFi EC 身份只用 secp256r1）"));
+                        continue;
+                    }
                     return java.security.KeyFactory.getInstance("EC")
                             .generatePublic(new java.security.spec.X509EncodedKeySpec(spki));
                 } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("MfiCrypto", t);
@@ -164,6 +172,21 @@ public final class MfiCrypto {
             }
         }
         return null;
+    }
+
+    /** secp256r1 曲线 OID: 1.2.840.10045.3.1.7 → 06 08 2A 86 48 CE 3D 03 01 07。 */
+    private static final byte[] OID_P256 = {0x06, 0x08, 0x2A, (byte) 0x86, 0x48,
+            (byte) 0xCE, 0x3D, 0x03, 0x01, 0x07};
+
+    private static boolean spkiContainsOid(byte[] spki, byte[] oid) {
+        for (int i = 0; i + oid.length <= spki.length; i++) {
+            boolean hit = true;
+            for (int k = 0; k < oid.length; k++) {
+                if (spki[i + k] != oid[k]) { hit = false; break; }
+            }
+            if (hit) return true;
+        }
+        return false;
     }
 
     /** ECDSA 验签（MFi ECC 身份用 SHA-256；老一点的用 SHA-1，两个都试）。
