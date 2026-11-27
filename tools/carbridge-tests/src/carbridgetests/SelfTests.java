@@ -284,6 +284,95 @@ public final class SelfTests {
         byte[] appleOid = {0x06, 0x0A, 0x2A, (byte) 0x86, 0x48, (byte) 0x86, (byte) 0xF7, 0x63, 0x64, 0x06, 0x02, 0x01};
         check(MfiCrypto.looksAppleIssued(appleOid), "检出 Apple OID 弧");
         check(!MfiCrypto.looksAppleIssued(new byte[]{1, 2, 3}), "普通字节不算 Apple 证书");
+
+        // raw r||s（64B）ECDSA 签名：BoringSSL/WebCrypto 惯例，以前误拒
+        byte[] raw = derSigToRaw(sig);
+        check(raw != null, "DER 签名可转 raw r||s");
+        check(raw != null && MfiCrypto.verifyEcSignature(challenge, raw, parsed),
+                "raw r||s ECDSA 验签通过（第 11 批修复）");
+        check(raw != null && !MfiCrypto.verifyEcSignature(tampered, raw, parsed),
+                "raw r||s 挑战被改 → 验签失败");
+
+        // RSA：SHA-1（传统 MFi）与 SHA-256（较新）都必须能验
+        KeyPairGenerator rg = KeyPairGenerator.getInstance("RSA");
+        rg.initialize(1024);
+        KeyPair rkp = rg.generateKeyPair();
+        java.security.interfaces.RSAPublicKey rpub =
+                (java.security.interfaces.RSAPublicKey) rkp.getPublic();
+        MfiCrypto.RsaKey rsa = new MfiCrypto.RsaKey(rpub.getModulus(), rpub.getPublicExponent());
+        for (String alg : new String[]{"SHA1withRSA", "SHA256withRSA"}) {
+            java.security.Signature rs = java.security.Signature.getInstance(alg);
+            rs.initSign(rkp.getPrivate());
+            rs.update(challenge);
+            byte[] rsig = rs.sign();
+            check(MfiCrypto.verifySignature(challenge, rsig, rsa),
+                    "RSA " + alg + " 验签通过（第 11 批修复）");
+            check(!MfiCrypto.verifySignature(tampered, rsig, rsa),
+                    "RSA " + alg + " 挑战被改 → 验签失败");
+        }
+
+        // ⚠️ e=1 的「证书」必须被拒（否则签名=EM 本身，零私钥运算即可伪造，实测过）
+        byte[] em = buildSha1Em(challenge);
+        java.math.BigInteger ff128 = java.math.BigInteger.ONE.shiftLeft(1024).subtract(java.math.BigInteger.ONE);
+        MfiCrypto.RsaKey evil = new MfiCrypto.RsaKey(ff128, java.math.BigInteger.ONE);
+        check(!MfiCrypto.verifySignature(challenge, em, evil),
+                "e=1 公钥 + 自造 EM → 必须拒绝（第 11 批修复）");
+
+        // 形状校验：长度字段不自洽的「DER」不算
+        check(!MfiCrypto.signatureShapeOk(new byte[]{0x30, 0, 0, 0, 0, 0, 0, 0}, null, parsed),
+                "30 00… 假 DER 形状 → false（第 11 批修复）");
+        check(raw != null && MfiCrypto.signatureShapeOk(raw, null, parsed), "raw r||s 形状 → true");
+
+        // 畸形 DER 的 certValidity 不许外抛（会整条 0xAA01 丢失）
+        check(MfiCrypto.certValidity(new byte[]{0x30, (byte) 0x84, 0x7F, (byte) 0xFF, (byte) 0xFF}) == null,
+                "畸形长度 DER → certValidity 返回 null 而非抛异常");
+        check(MfiCrypto.certValidity(new byte[]{0x17, 0x05, '2', '0'}) == null,
+                "截断 UTCTime → return null");
+    }
+
+    /** 构造一份「SHA-1 DigestInfo + PKCS#1 填充」的 EM（供 e=1 伪造测试用）。 */
+    private static byte[] buildSha1Em(byte[] challenge) throws Exception {
+        byte[] digest = java.security.MessageDigest.getInstance("SHA-1").digest(challenge);
+        byte[] di = {0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A, 0x05, 0x00};
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        out.write(0x00);
+        out.write(0x01);
+        for (int i = 0; i < 64; i++) out.write(0xFF);   // 足够长的 FF 填充
+        out.write(0x00);
+        out.write(di, 0, di.length);
+        out.write(digest, 0, digest.length);
+        return out.toByteArray();
+    }
+
+    /** DER SEQUENCE{INTEGER r, INTEGER s} → 64B raw r||s（各补零到 32B）。 */
+    private static byte[] derSigToRaw(byte[] der) {
+        try {
+            int p = 0;
+            if ((der[p++] & 0xFF) != 0x30) return null;
+            int total = der[p++] & 0xFF;
+            if (total > 0x7F) return null;   // 测试只处理短形式
+            if ((der[p++] & 0xFF) != 0x02) return null;
+            int lr = der[p++] & 0xFF;
+            byte[] r = java.util.Arrays.copyOfRange(der, p, p + lr);
+            p += lr;
+            if ((der[p++] & 0xFF) != 0x02) return null;
+            int ls = der[p++] & 0xFF;
+            byte[] s = java.util.Arrays.copyOfRange(der, p, p + ls);
+            byte[] out = new byte[64];
+            copyLeftPadded(r, out, 0);
+            copyLeftPadded(s, out, 32);
+            return out;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static void copyLeftPadded(byte[] src, byte[] dst, int off) {
+        int start = 0;
+        while (start < src.length - 1 && src[start] == 0) start++;
+        int n = src.length - start;
+        if (n > 32) n = 32;
+        System.arraycopy(src, src.length - n, dst, off + 32 - n, n);
     }
 
     // ---------------------------------------------------------------- 画质

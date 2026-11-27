@@ -111,7 +111,9 @@ public final class Iap2Ids {
             case AUTH_CERTIFICATE: return "AuthCertificate";
             case AUTH_CHALLENGE_RESPONSE: return "AuthChallengeResponse";
             case AUTH_RESPONSE: return "AuthResponse";
+            case AUTH_FAILED: return "AuthFailed";
             case AUTH_SUCCEEDED: return "AuthSucceeded";
+            case AUTH_STATUS: return "AuthStatus";
             case REQUEST_ACCESSORY_WIFI_CONFIGURATION: return "RequestAccessoryWiFiConfiguration";
             case ACCESSORY_WIFI_CONFIGURATION: return "AccessoryWiFiConfiguration";
             case CARPLAY_AVAILABILITY: return "CarPlayAvailability";

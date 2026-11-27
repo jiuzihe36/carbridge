@@ -125,9 +125,10 @@ public final class MfiCrypto {
             len = b;
         } else {
             int n = b & 0x7F;
-            if (p + n > der.length) return null;
+            if (n > 3 || p + n > der.length) return null;   // DER 长度最多 3 字节（<16MB）；大值视为畸形
             len = 0;
             for (int i = 0; i < n; i++) len = (len << 8) | (der[p++] & 0xFF);
+            if (len < 0) return null;                        // int 溢出（0x84 7F FF FF 会变负数）
         }
         if (p + len > der.length) return null;
         return new Len(p, p + len);
@@ -165,19 +166,69 @@ public final class MfiCrypto {
         return null;
     }
 
-    /** ECDSA 验签（MFi ECC 身份用 SHA-256；老一点的用 SHA-1，两个都试）。 */
+    /** ECDSA 验签（MFi ECC 身份用 SHA-256；老一点的用 SHA-1，两个都试）。
+     *  ⚠️ 签名形式两种都收：DER SEQUENCE（Java/OpenSSL 惯例）与 64B raw r||s
+     *  （WebCrypto/BoringSSL 惯例）。以前只认 DER，raw 签名的车机在严格模式下会误拒。 */
     public static boolean verifyEcSignature(byte[] challenge, byte[] signature, java.security.PublicKey key) {
         if (challenge == null || signature == null || key == null) return false;
+        byte[][] forms;
+        if (signature.length == 64) {
+            byte[] der = ecRawToDer(signature);
+            forms = der != null ? new byte[][]{der, signature} : new byte[][]{signature};
+        } else {
+            forms = new byte[][]{signature};
+        }
         for (String alg : new String[]{"SHA256withECDSA", "SHA1withECDSA"}) {
-            try {
-                java.security.Signature v = java.security.Signature.getInstance(alg);
-                v.initVerify(key);
-                v.update(challenge);
-                if (v.verify(signature)) return true;
-            } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("MfiCrypto", t);
+            for (byte[] form : forms) {
+                try {
+                    java.security.Signature v = java.security.Signature.getInstance(alg);
+                    v.initVerify(key);
+                    v.update(challenge);
+                    if (v.verify(form)) return true;
+                } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("MfiCrypto", t);
+                }
             }
         }
         return false;
+    }
+
+    /** 64B raw r||s（各 32B 大端）→ DER SEQUENCE{r,s}。失败返回 null。 */
+    private static byte[] ecRawToDer(byte[] raw) {
+        try {
+            byte[] r = derInteger(raw, 0, 32);
+            byte[] s = derInteger(raw, 32, 32);
+            int len = r.length + s.length;
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream(len + 4);
+            out.write(0x30);
+            if (len < 0x80) {
+                out.write(len);
+            } else {
+                out.write(0x81);
+                out.write(len);
+            }
+            out.write(r, 0, r.length);
+            out.write(s, 0, s.length);
+            return out.toByteArray();
+        } catch (Throwable t) {
+            com.carbridge.carplay.util.Diag.w("MfiCrypto", t);
+            return null;
+        }
+    }
+
+    /** 把大端无符号整数（span）编成 DER INTEGER：去前导零、最高位为 1 时补 0x00。 */
+    private static byte[] derInteger(byte[] src, int off, int len) {
+        int start = off;
+        int end = off + len;
+        while (start < end - 1 && src[start] == 0) start++;
+        boolean pad = (src[start] & 0x80) != 0;
+        int body = end - start + (pad ? 1 : 0);
+        byte[] out = new byte[2 + body];
+        out[0] = 0x02;
+        out[1] = (byte) body;
+        int p = 2;
+        if (pad) out[p++] = 0x00;
+        System.arraycopy(src, start, out, p, end - start);
+        return out;
     }
 
     /**
@@ -187,24 +238,38 @@ public final class MfiCrypto {
      */
     public static long[] certValidity(byte[] der) {
         if (der == null) return null;
-        long[] out = new long[2];
-        int got = 0;
-        for (int i = 0; i + 2 < der.length && got < 2; i++) {
-            int tag = der[i] & 0xFF;
-            if (tag != 0x17 && tag != 0x18) continue;
-            Len len = readLength(der, i + 1);
-            if (len == null) continue;
-            String s = new String(der, len.valueStart, len.valueEnd - len.valueStart,
-                    java.nio.charset.StandardCharsets.US_ASCII);
-            long ms = parseAsn1Time(s, tag == 0x18);
-            if (ms > 0) out[got++] = ms;
-            i = len.valueEnd - 1;
+        try {
+            long[] out = new long[2];
+            int got = 0;
+            for (int i = 0; i + 2 < der.length && got < 2; i++) {
+                int tag = der[i] & 0xFF;
+                if (tag != 0x17 && tag != 0x18) continue;
+                Len len = readLength(der, i + 1);
+                if (len == null || len.valueStart < 0 || len.valueEnd > der.length
+                        || len.valueEnd < len.valueStart) continue;
+                String s = new String(der, len.valueStart, len.valueEnd - len.valueStart,
+                        java.nio.charset.StandardCharsets.US_ASCII);
+                long ms = parseAsn1Time(s, tag == 0x18);
+                if (ms > 0) out[got++] = ms;
+                i = len.valueEnd - 1;
+            }
+            return got == 2 ? out : null;
+        } catch (Throwable t) {
+            // ⚠️ 这个入口以前是全类唯一没有 try/catch 的：畸形 DER 一旦抛
+            //    StringIndexOutOfBounds 就被链路层当「坏帧」吞掉 —— 0xAA01 整条丢失、
+            //    挑战不发、静默卡在 AUTHENTICATING（与「0xAA00 无超时」同症状）。
+            com.carbridge.carplay.util.Diag.w("MfiCrypto.certValidity", t);
+            return null;
         }
-        return got == 2 ? out : null;
     }
 
     private static long parseAsn1Time(String s, boolean generalized) {
         try {
+            // 支持「无秒」形式：UTCTime yyMMddHHmmZ(11)/GeneralizedTime yyyyMMddHHmmZ(13)
+            if (s.endsWith("Z")) {
+                if (!generalized && s.length() == 11) s = s.substring(0, 10) + "00Z";
+                if (generalized && s.length() == 13) s = s.substring(0, 12) + "00Z";
+            }
             java.text.SimpleDateFormat f = new java.text.SimpleDateFormat(
                     generalized ? "yyyyMMddHHmmss'Z'" : "yyMMddHHmmss'Z'", java.util.Locale.US);
             f.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
@@ -230,7 +295,11 @@ public final class MfiCrypto {
         if (rsa != null) return sig.length == (rsa.modulus.bitLength() + 7) / 8;
         if (ec != null) {
             if (sig.length == 64) return true;                       // raw r||s
-            return (sig[0] & 0xFF) == 0x30 && sig.length >= 8 && sig.length <= 80;  // DER
+            // DER SEQUENCE：以前只看首字节 0x30 + 长度 8..80，`30 00 00 00 00 00 00 00`
+            // 也会判 true。现在要求长度字段与总长自洽。
+            if ((sig[0] & 0xFF) != 0x30) return false;
+            int l = sig[1] & 0xFF;
+            return l >= 6 && l <= 78 && l + 2 == sig.length;
         }
         return false;
     }
@@ -251,18 +320,41 @@ public final class MfiCrypto {
 
     // ================================================================== RSA 验签
 
+    /** DigestInfo 前缀（含算法 OID 与 NULL 参数）：MFi 老车机用 SHA-1，新一些的用 SHA-256。 */
+    private static final byte[] DI_SHA1 = {
+            0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A, 0x05, 0x00};
+    private static final byte[] DI_SHA256 = {
+            0x30, 0x31, 0x30, 0x0D, 0x06, 0x09, 0x60, (byte) 0x86, 0x48, 0x01, 0x65,
+            0x03, 0x04, 0x02, 0x01, 0x05, 0x00};
+    /** 省略 NULL 参数的变体（部分实现这么签）：SHA-1 与 SHA-256。 */
+    private static final byte[] DI_SHA1_NONULL = {
+            0x30, 0x1F, 0x30, 0x07, 0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A};
+    private static final byte[] DI_SHA256_NONULL = {
+            0x30, 0x2F, 0x30, 0x0B, 0x06, 0x09, 0x60, (byte) 0x86, 0x48, 0x01, 0x65,
+            0x03, 0x04, 0x02, 0x01};
+
     /**
-     * 验证 0xAA03 的签名（PKCS#1 v1.5 + SHA-1）。
+     * 验证 0xAA03 的签名（PKCS#1 v1.5）。
      *
-     * @param challenge 20 字节挑战
-     * @param signature 128 字节 RSA 签名
+     * <p>摘要算法按 DigestInfo 前缀自动识别：SHA-1（MFi 传统）与 SHA-256（较新）。
+     * 以前写死 SHA-1，严格模式下 SHA-256 签名会被误拒。
+     *
+     * @param challenge 20/32 字节挑战
+     * @param signature 模长字节的 RSA 签名
      * @param key       从证书解析出的公钥
      */
     public static boolean verifySignature(byte[] challenge, byte[] signature, RsaKey key) {
         if (challenge == null || signature == null || key == null) return false;
+        // ⚠️ 公钥参数最低校验：e=1 的「证书」曾能通过 —— 此时签名就是 EM 本身，
+        //    零私钥运算即可伪造任意签名（实测）。RSA 要求 e 为 ≥3 的奇数。
+        if (key.exponent.compareTo(java.math.BigInteger.valueOf(3)) < 0
+                || !key.exponent.testBit(0)) {
+            return false;
+        }
         try {
             BigInteger m = new BigInteger(1, signature).modPow(key.exponent, key.modulus);
             int k = (key.modulus.bitLength() + 7) / 8;
+            if (k < 64) return false;   // 512-bit 以下的 RSA 身份不接受
             byte[] em = new byte[k];
             byte[] raw = m.toByteArray();
             int src = Math.max(0, raw.length - k);
@@ -272,16 +364,36 @@ public final class MfiCrypto {
             if (em[0] != 0x00 || em[1] != 0x01) return false;
             int p = 2;
             while (p < em.length && em[p] == (byte) 0xFF) p++;
+            if (p - 2 < 8) return false;   // PKCS#1 要求至少 8 字节 FF 填充
             if (p >= em.length || em[p] != 0x00) return false;
             int diStart = p + 1;
-            // DigestInfo 末尾 20 字节是 SHA-1(challenge)
-            if (em.length - diStart < 20 + 15) return false;
-            byte[] digest = new byte[20];
-            System.arraycopy(em, em.length - 20, digest, 0, 20);
-            byte[] expected = MessageDigest.getInstance("SHA-1").digest(challenge);
+            String hash;
+            int digestLen;
+            if (startsWith(em, diStart, DI_SHA256) || startsWith(em, diStart, DI_SHA256_NONULL)) {
+                hash = "SHA-256";
+                digestLen = 32;
+            } else if (startsWith(em, diStart, DI_SHA1) || startsWith(em, diStart, DI_SHA1_NONULL)) {
+                hash = "SHA-1";
+                digestLen = 20;
+            } else {
+                // 只认标准 DigestInfo；未知 OID = 不是合法 PKCS#1 v1.5(SHA-1/256)
+                return false;
+            }
+            if (em.length - diStart < digestLen + 10) return false;
+            byte[] digest = new byte[digestLen];
+            System.arraycopy(em, em.length - digestLen, digest, 0, digestLen);
+            byte[] expected = MessageDigest.getInstance(hash).digest(challenge);
             return MessageDigest.isEqual(digest, expected);
         } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("MfiCrypto", t);
             return false;
         }
+    }
+
+    private static boolean startsWith(byte[] d, int off, byte[] prefix) {
+        if (d == null || off < 0 || off + prefix.length > d.length) return false;
+        for (int i = 0; i < prefix.length; i++) {
+            if (d[off + i] != prefix[i]) return false;
+        }
+        return true;
     }
 }

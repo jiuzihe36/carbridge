@@ -151,6 +151,12 @@ public final class Iap2SenderSession {
                     });
     /** 每次发挑战自增，用来判定「定时器回来时还是不是同一轮」。 */
     private volatile int challengeToken;
+    /** 0xAA00 → 0xAA01 的重发计数（看门狗用，每轮认证归零）。 */
+    private int authCertRetries;
+    /** 本端主动关闭中（close()→CLOSED）：链路被拆不能算「挑战档位被拒」。 */
+    private volatile boolean closing;
+    /** 认证完成前早到的 0x5703 凭据缓存（认证成功后按正常流程处理）。 */
+    private volatile WifiConfig earlyWifiConfig;
     /** 上一份 0xAA03 签名（重放检测）与它对应的挑战。 */
     private volatile byte[] lastResponseSig;
     private volatile byte[] lastResponseFor;
@@ -191,7 +197,9 @@ public final class Iap2SenderSession {
                 else if (s == Iap2LinkEngine.State.CLOSED) {
                     // 挑战在途时链路被拆 = 这个长度把对端打死了（DiPlay 实录：收到 20B 直接断链）。
                     // 记住本档（进程级），下条链路直接跳过它，否则每轮都从同一档发起 = 永久失败循环。
-                    if (state == State.AUTHENTICATING && challengeSent) {
+                    // ⚠️ 但**本端主动关闭**（换会话 close()/prev.close()）与握手前掉线不算：
+                    //    以前无条件记录 —— 一次正常的会话替换就能把好档位永久封禁。
+                    if (state == State.AUTHENTICATING && challengeSent && !closing) {
                         rejectCurrentChallengeLevel();
                     }
                     setState(State.CLOSED);
@@ -404,6 +412,7 @@ public final class Iap2SenderSession {
     public void start() { engine.start(); }
     public void onBytes(byte[] data) { engine.onBytes(data); }
     public void close() {
+        closing = true;   // 先立标记：链路因此被拆不能算「挑战档位被拒」
         try { authTimer.shutdownNow(); } catch (Throwable tDiag) { Diag.w("Iap2SenderSession.close", tDiag); } engine.close(); setState(State.CLOSED); }
 
     // ================================================================== 链路起来后
@@ -653,8 +662,40 @@ public final class Iap2SenderSession {
         // ⚠️ MFi 认证由**手机发起**：先请对端给证书（orangecar 真车抓包确认）。
         // 只被动等 0xAA01 会永远卡住（DiPlay 实测）。
         setState(State.AUTHENTICATING);
+        // 新一轮认证：挑战梯与在途标记全部归零（重复 0x1D01 重进这里时不能从上一档续跑）
+        challengeIndex = -1;
+        challengeSent = false;
+        authCertRetries = 0;
         engine.sendCsm(Iap2Ids.AUTH_INFORMATION, new byte[0]);
         log("发送 RequestAuthCertificate (0xAA00)");
+        // ⚠️ 0xAA01 等待超时：以前这里没有任何超时 —— 车机不回证书就永远卡在
+        //    AUTHENTICATING（15s 看门狗只判 IDENTIFYING，stall 看门狗只打日志）。
+        //    超时先重发一次 0xAA00；再超时就明确失败，别让界面假装在忙。
+        scheduleAuthCertWatchdog();
+    }
+
+    /** 0xAA01（认证证书）等待看门狗：5s 未到先重发一次，再 5s 未到判失败。 */
+    private void scheduleAuthCertWatchdog() {
+        try {
+            authTimer.schedule(new Runnable() {
+                @Override public void run() {
+                    if (state != State.AUTHENTICATING || challengeSent) return;   // 证书已到/已推进
+                    if (closing) return;
+                    if (authCertRetries < 1) {
+                        authCertRetries++;
+                        log("⚠ 0xAA00 发出 5s 没收到 0xAA01（认证证书）→ 重发一次请求");
+                        engine.sendCsm(Iap2Ids.AUTH_INFORMATION, new byte[0]);
+                        scheduleAuthCertWatchdog();
+                    } else {
+                        log("⚠ 两次 0xAA00 都没回证书 —— 车机没在做 MFi 认证（或消息 ID 不对）");
+                        listener.onLog("车机没回认证证书（0xAA01）：确认车机 CarPlay 已启用");
+                        setState(State.ERROR);
+                    }
+                }
+            }, 5, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (Throwable tDiag) {
+            Diag.w("Iap2SenderSession.authCertWatchdog", tDiag);
+        }
     }
 
         /**
@@ -711,9 +752,9 @@ public final class Iap2SenderSession {
                 boolean expired = now > valid[1];
                 boolean notYet = now < valid[0];
                 log("证书有效期：" + fmtTime(valid[0]) + " ~ " + fmtTime(valid[1])
-                        + (expired ? " · 已过期" : notYet ? " · 尚未生效" : " · 有效"));
-                if (expired && verifyMfiSignature) {
-                    log("严格模式：证书已过期，回 0xAA04");
+                        + (expired ? " · 已过期" : notYet ? " · 尚未生效" : " · 未过期"));
+                if ((expired || notYet) && verifyMfiSignature) {
+                    log("严格模式：证书" + (expired ? "已过期" : "尚未生效") + "，回 0xAA04");
                     engine.sendCsm(Iap2Ids.AUTH_FAILED, new byte[0]);
                     setState(State.ERROR);
                     return;
@@ -721,11 +762,15 @@ public final class Iap2SenderSession {
             } else {
                 log("证书里没解析出有效期（裸公钥/占位证书的可能性大）");
             }
+            // ⚠️ 写清楚「验了什么、没验什么」：这里只提取公钥 + 形状/有效期探针，
+            //    **不验证书签发链**（没有 Apple 根证书可钉）。以前日志打「Apple OID 体系 ·
+            //    有效」容易让人以为链已验过 —— 实际只是提示，不是信任锚。
             log("收到 MFi 证书 " + cert.value.length + "B → "
                     + (peerRsaKey != null ? peerRsaKey.toString()
                        : peerEcKey != null ? ("EC-" + peerEcKey.getAlgorithm())
                        : "未解析出公钥")
-                    + (peerCertApple ? " · Apple OID 体系" : " · 非 Apple OID（自制/占位证书）"));
+                    + (peerCertApple ? " · 含 Apple OID 弧（仅提示，未验签发链）"
+                                     : " · 非 Apple OID（自制/占位证书）"));
         }
         // 认证已完成（challengeSent 已复位）后车机重发 0xAA01 时不能再发挑战；
         // 只有还在认证中才允许发起/续发挑战。
@@ -786,6 +831,15 @@ public final class Iap2SenderSession {
     }
 
     private void onAuthResponse(Iap2Csm.Message m) {
+        // ⚠️ 状态闸：0xAA03 只在「认证中且挑战在途」时有意义。
+        //    以前不看状态：车机重发同一 0xAA03 时，严格模式判重放 → 直接 0xAA04+ERROR 拆链；
+        //    宽松模式把已 READY 的会话倒退成 REQUESTING_WIFI 并重发 0x5702 ——
+        //    一个可忽略的重复消息把整轮认证/寻找端点的进度全推翻。
+        if (state != State.AUTHENTICATING || !challengeSent) {
+            log("忽略 0xAA03：当前不在等待挑战响应（state=" + state
+                    + " challengeSent=" + challengeSent + "）");
+            return;
+        }
         boolean accepted = true;
         Iap2Csm.Param sig0 = m.params().isEmpty() ? null : m.params().get(0);
         if (sig0 != null) {
@@ -810,12 +864,25 @@ public final class Iap2SenderSession {
             }
         }
         if (verifyMfiSignature) {
+            // ⚠️ 严格模式必须两种身份都验：以前这里硬要求 peerRsaKey != null，
+            //    EC 证书（DiPlay AuthV3、Apple 近年 MFi）的车机会被**一律误拒**——
+            //    宽松模式能通的机器，开严格模式反而拒绝，语义完全反了。
             Iap2Csm.Param sig = m.params().isEmpty() ? null : m.params().get(0);
-            accepted = sig != null && peerRsaKey != null && lastChallenge != null
-                    && MfiCrypto.verifySignature(lastChallenge, sig.value, peerRsaKey);
-            log("MFi 验签：" + (accepted ? "通过" : "失败")
-                    + "（签名 " + (sig == null ? "?" : sig.value.length) + "B，证书 "
-                    + (peerRsaKey == null ? "未解析" : peerRsaKey.toString()) + "）");
+            boolean ok = false;
+            String how = "无公钥";
+            if (sig != null && lastChallenge != null) {
+                if (peerRsaKey != null) {
+                    ok = MfiCrypto.verifySignature(lastChallenge, sig.value, peerRsaKey);
+                    how = peerRsaKey.toString();
+                } else if (peerEcKey != null) {
+                    ok = MfiCrypto.verifyEcSignature(lastChallenge, sig.value, peerEcKey);
+                    how = "EC-" + peerEcKey.getAlgorithm();
+                }
+            }
+            accepted = ok;
+            log("MFi 验签：" + (ok ? "通过" : "失败")
+                    + "（签名 " + (sig == null ? "?" : sig.value.length) + "B，"
+                    + how + "）");
         } else {
             // 宽松模式也要「探测性验签」：结果只进日志，不影响放行。
             // 现场靠这一行就能区分「车机真的签了」和「随便回了个包」。
@@ -844,12 +911,25 @@ public final class Iap2SenderSession {
         }
         engine.sendCsm(Iap2Ids.AUTH_SUCCEEDED, new byte[0]);
         challengeSent = false;
+        // 认证成功 = 挑战档位是对的：把「被拒档位」进程级记忆清空，
+        // 避免一次历史瞬断把唯一能用的档位永久拉黑（下次会话重新从首发档开始）。
+        if (!REJECTED_CHALLENGE_LEVELS.isEmpty()) {
+            log("认证成功 → 清空被拒挑战档位记忆 " + REJECTED_CHALLENGE_LEVELS);
+            REJECTED_CHALLENGE_LEVELS.clear();
+        }
         // 真 iPhone 在 0xAA05 之后约 0.3s 推一串「设备状态问候」——
         // 车机会等这批消息才往下走，晚了它就不认我们了。
         sendDeviceGreeting();
         setState(State.REQUESTING_WIFI);
         engine.sendCsm(Iap2Ids.REQUEST_ACCESSORY_WIFI_CONFIGURATION, new byte[0]);
         log("发送 RequestAccessoryWiFiConfiguration (0x5702)");
+        // 认证前早到的 0x5703：认证已通过，补处理（凭据不丢）
+        WifiConfig early = earlyWifiConfig;
+        earlyWifiConfig = null;
+        if (early != null) {
+            log("补处理认证前早到的 0x5703：" + early);
+            applyWifiConfig(early);
+        }
         // 认证后看门狗：真车机拿到 0xAA05 会马上给 0x5703 或（新势力形态）直接回 0x4301。
         // 两边都没有说明它在认证后反悔了 —— 以前这种会话会静默停住，看不出原因。
         try {
@@ -894,6 +974,20 @@ public final class Iap2SenderSession {
                     + describeIds(params) + "），AirPlay 端点改用 mDNS 发现");
         }
         log("收到 0x5703：" + cfg);
+        if (state == State.IDENTIFYING || state == State.AUTHENTICATING
+                || state == State.IDLE) {
+            // 认证完成前到达的凭据（车机正常不该这么早发）：缓存，认证成功后再处理。
+            // 以前直接往下走：状态被提前推进到 STARTING_SESSION、0x4300 提前发，
+            // 认证成功后又发一遍 —— 车机侧看到重复请求 + 状态倒退。
+            log("0x5703 在认证完成前到达 → 缓存凭据，认证成功后处理");
+            earlyWifiConfig = cfg;
+            return;
+        }
+        applyWifiConfig(cfg);
+    }
+
+    /** 0x5703 凭据的落地处理（认证后的正常路径与「早到缓存」共用）。 */
+    private void applyWifiConfig(WifiConfig cfg) {
         listener.onWifiConfig(cfg);
         if (state == State.READY) {
             // 没主动再要过凭据时晚到的重复 0x5703（重请求应答等）：只更新凭据，
@@ -917,6 +1011,12 @@ public final class Iap2SenderSession {
     // ---------------------------------------------------------------- 会话端点
 
     private void onCarPlayStartSession(Iap2Csm.Message m) {
+        // 认证完成前的端点（0x4301）没有意义：车机正常在认证后才发。忽略并留痕。
+        if (state == State.IDENTIFYING || state == State.AUTHENTICATING
+                || state == State.IDLE) {
+            log("忽略 0x4301：认证尚未完成（state=" + state + "）");
+            return;
+        }
         endpointSeen = true;
         List<Iap2Csm.Param> params = m.params();
         log("收到 CarPlayStartSession (0x4301)，" + params.size() + " 个参数");
