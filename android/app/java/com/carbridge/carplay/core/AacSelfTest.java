@@ -92,17 +92,20 @@ public final class AacSelfTest {
             int peak = 0;
             MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
             for (byte[] frame : frames) {
-                int inIdx;
-                while (true) {
+                int inIdx = -1;
+                // ⚠️ 循环必须有上限：坏解码器会一直不给输入缓冲，while(true) 把
+                //    自检线程永久卡死（10ms 超时 × 无限次）。100 次 ≈ 1s，超了放弃。
+                for (int tries = 0; tries < 100; tries++) {
                     inIdx = dec.dequeueInputBuffer(10_000);
                     if (inIdx >= 0) break;
                 }
+                if (inIdx < 0) break;   // 解码器不吐输入缓冲：放弃本轮
                 ByteBuffer in = dec.getInputBuffer(inIdx);
                 in.clear();
                 in.put(frame);
                 dec.queueInputBuffer(inIdx, 0, frame.length, 0, 0);
-                // 抽干输出
-                while (true) {
+                // 抽干输出（同样限次：持续返回负值/格式变更的坏解码器不能无限转）
+                for (int tries = 0; tries < 200; tries++) {
                     int out = dec.dequeueOutputBuffer(info, 10_000);
                     if (out == MediaCodec.INFO_TRY_AGAIN_LATER) break;
                     if (out < 0) continue;

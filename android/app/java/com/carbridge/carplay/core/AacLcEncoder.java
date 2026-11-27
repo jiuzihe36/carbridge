@@ -82,15 +82,28 @@ public final class AacLcEncoder {
      */
     public synchronized List<byte[]> encode(byte[] pcm, int len) {
         out.clear();
-        if (!started || codec == null || pcm == null || len <= 0) {
+        if (!started || codec == null) {
             return new ArrayList<byte[]>();
+        }
+        if (pcm == null || len <= 0) {
+            // len<=0 = 「催一次输出」：编码器里可能还压着上一帧的产物，
+            // 以前这里直接 return，自检的「逼尾帧」是 no-op、会话结束也丢尾帧。
+            try {
+                drain();
+            } catch (Throwable tDiag) {
+                Diag.w("AacLcEncoder.drainTail", tDiag);
+            }
+            return new ArrayList<byte[]>(out);
         }
         try {
             int i = 0;
             if (pendingLen == 1 && len > 0) {
-                // 上次剩了半个样本，补齐
-                frameBuf[frameFill++] = pcm[0];
+                // 上次剩了半个样本，补齐。
+                // ⚠️ 小端采样：先低字节再高字节。pendingByte 是上一块的最后一个字节
+                //    （低字节），本块第一个字节才是高字节 —— 以前这里写反了，
+                //    跨块的每个样本高低字节颠倒（沙沙声/失真，只在奇数长度输入时出现）。
                 frameBuf[frameFill++] = pendingByte[0];
+                frameBuf[frameFill++] = pcm[0];
                 pendingLen = 0;
                 i = 1;
                 if (frameFill >= frameBytes) {

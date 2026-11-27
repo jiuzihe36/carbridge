@@ -51,10 +51,13 @@ public final class QualityPrefs {
      * <p>自动模式下优先用「车机 /info 声明的画布」——车机画布才是真正要看的那块屏，
      * 我们自己填的分辨率只是没有车机信息时的兜底。
      *
+     * @param fpsCap 自适应帧率上限（0 = 不设限）：autoFit 模式下用它把车机声明的帧率
+     *               往下压（实测掉帧时），手动模式不受影响。上限走实值（45 也合法），
+     *               且只会压、不会抬过车机声明。
      * @return {width, height, fps}
      */
     public static int[] paramsForStart(boolean autoFit, int carW, int carH, int carFps,
-                                       int encW, int encH, int fpsIndex) {
+                                       int encW, int encH, int fpsIndex, int fpsCap) {
         int w = encW, h = encH;
         int f = FPS_OPTIONS[clampIndex(fpsIndex, FPS_OPTIONS.length)];
         if (autoFit && carW > 0 && carH > 0) {
@@ -63,6 +66,9 @@ public final class QualityPrefs {
                 w = fit[0];
                 h = fit[1];
                 f = DisplayGeometry.clampFps(carFps);
+                if (fpsCap > 0) {
+                    f = Math.min(f, DisplayGeometry.clampFps(fpsCap));
+                }
             }
         }
         return new int[]{w, h, f};

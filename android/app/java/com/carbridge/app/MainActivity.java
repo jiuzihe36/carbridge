@@ -442,6 +442,8 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
     private static final String KEY_W = "enc_width";
     private static final String KEY_H = "enc_height";
     private static final String KEY_FPS = "fps_index";
+    /** 自适应帧率上限（0=不设限；仅 autoFit 模式生效，手动改帧率会清空）。 */
+    private static final String KEY_FPS_CAP = "fps_cap";
     private static final String KEY_AUTO_FIT = "auto_fit";
     /** 「按车机记忆连接参数」开关（默认关：开启才允许记忆值参与连接，行为可预期）。 */
     private static final String KEY_CAR_PROFILE_MEMORY = "car_profile_memory";
@@ -584,6 +586,8 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                         if (index == fpsIndex) return;
                         fpsIndex = index;
                         autoFit = false;          // 手动选帧率 = 放弃自动跟随，避免下一次又被覆盖
+                        getSharedPreferences(PREF_NAME, MODE_PRIVATE).edit()
+                                .putInt(KEY_FPS_CAP, 0).apply();   // 用户意图优先：清掉自适应上限
                         persistQuality();
                         restyleSegments();
                         updateQualityTargetView();
@@ -683,15 +687,16 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
     /** 本次连接实际要请求的编码参数：自动模式优先用上一次车机声明的画布。 */
     private int[] encoderParamsForStart() {
         return QualityPrefs.paramsForStart(autoFit, carW, carH, carFps,
-                encWidth, encHeight, fpsIndex);
+                encWidth, encHeight, fpsIndex, fpsCap());
     }
     /**
-     * Car+ 自适应（AdaptiveResolution 的唯一接线点）：会话结束后按本轮**实测平均帧率**
-     * 给「下一次连接」调整编码参数。
+     * Car+ 自适应（AdaptiveResolution 的接线点）：会话结束后按本轮**实测平均帧率**
+     * 调整「下一次连接」的**帧率上限**（只有这条通路在 autoFit 模式下真正生效——
+     * paramsForStart 在 autoFit 时忽略 enc 尺寸与 fpsIndex，见 J 审计 P1#1）。
      *
-     * <p>安全边界：① 只改下一次连接的请求参数（当前会话不动）；② 8 秒以内的样本不判
-     * （热身期帧率系统性偏低）；③ 迟滞死区 60%~90%（防临界抖动）；④ 车机画布优先，
-     * 画布规则赢过帧率规则；⑤ autoFit 关闭时完全不参与。
+     * <p>安全边界：① 只影响下一次连接；② 8 秒以内不判（热身期偏低）；③ 60%~90%
+     * 死区防抖；④ 上限只在 {60,45,30,24} 阶梯上走、不低于 24、不高于车机声明；
+     * ⑤ 手动改帧率会清掉上限（用户意图优先）；⑥ autoFit 关闭时完全不参与。
      */
     private void maybeAdaptForNextSession() {
         long since = streamingSinceMs;
@@ -700,43 +705,41 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         long seconds = Math.max(0L, System.currentTimeMillis() - since) / 1000;
         if (seconds < com.carbridge.carplay.core.AdaptiveResolution.MIN_SESSION_SECONDS) return;
         int frames = client != null ? client.frameCount() : 0;
-        double measured = seconds > 0 ? frames / (double) seconds : 0;
-        int curW = client != null && client.encodedWidth() > 0 ? client.encodedWidth() : encWidth;
-        int curH = client != null && client.encodedHeight() > 0 ? client.encodedHeight() : encHeight;
-        int curFps = FPS_OPTIONS[fpsIndex];
-        com.carbridge.carplay.core.AdaptiveResolution.Suggestion sg =
-                com.carbridge.carplay.core.AdaptiveResolution.suggest(
-                        carW, carH, carFps, curW, curH, curFps, measured, seconds);
-        if (sg == null) return;
-        if (!sg.changed && sg.width == curW && sg.height == curH && sg.fps == curFps) {
-            log("画质自适应：" + sg.reason);
+        if (frames <= 0) return;
+        double measured = frames / (double) seconds;
+        int carFpsClamped = carFps > 0 ? DisplayGeometry.clampFps(carFps) : 0;
+        if (carFpsClamped <= 0) return;
+        int cap = fpsCap();
+        int effective = cap > 0 ? Math.min(cap, carFpsClamped) : carFpsClamped;
+        double ratio = measured / (double) effective;
+        int next = cap;
+        if (ratio < com.carbridge.carplay.core.AdaptiveResolution.LOW_FPS_PERCENT / 100.0) {
+            int t = com.carbridge.carplay.core.AdaptiveResolution.downTier(effective);
+            if (t < effective && t >= com.carbridge.carplay.core.AdaptiveResolution.MIN_TIER_FPS) {
+                next = t;
+            }
+        } else if (ratio >= com.carbridge.carplay.core.AdaptiveResolution.HIGH_FPS_PERCENT / 100.0
+                && cap > 0) {
+            // 跑满当前上限 → 往上一档；追上/超过车机声明就撤掉上限
+            int t = com.carbridge.carplay.core.AdaptiveResolution.upTier(cap);
+            next = t >= carFpsClamped ? 0 : t;
+        }
+        if (next == cap) {
+            log("画质自适应：实测 " + String.format(java.util.Locale.US, "%.1f", measured)
+                    + "fps / 目标 " + effective + "fps（" + Math.round(ratio * 100)
+                    + "%），保持" + (cap > 0 ? "上限 " + cap + "fps" : "不设限"));
             return;
         }
-        log("画质自适应 → 下一次连接 " + curW + "x" + curH + "@" + curFps + " → "
-                + sg.width + "x" + sg.height + "@" + sg.fps + "（" + sg.reason + "）");
-        if (sg.width != curW || sg.height != curH) {
-            encWidth = clampDim(sg.width);
-            encHeight = clampDim(sg.height);
-        }
-        int idx = fpsToOptionIndex(sg.fps);
-        if (idx >= 0) fpsIndex = idx;
         getSharedPreferences(PREF_NAME, MODE_PRIVATE).edit()
-                .putInt(KEY_W, encWidth)
-                .putInt(KEY_H, encHeight)
-                .putInt(KEY_FPS, fpsIndex)
-                .apply();
-        if (editWidth != null) editWidth.setText(String.valueOf(encWidth));
-        if (editHeight != null) editHeight.setText(String.valueOf(encHeight));
-        updateQualityTargetView();
+                .putInt(KEY_FPS_CAP, next).apply();
+        log("画质自适应：实测 " + String.format(java.util.Locale.US, "%.1f", measured)
+                + "fps / 目标 " + effective + "fps（" + Math.round(ratio * 100) + "%）→ 下一次连接"
+                + (next > 0 ? "帧率上限 " + next + "fps" : "撤掉帧率上限（跟随车机 " + carFpsClamped + "fps）"));
     }
 
-    /** 把建议帧率映射到最近的（不高于它的）可选档位；没有更低的就用最低档。 */
-    private static int fpsToOptionIndex(int fps) {
-        int best = -1;
-        for (int i = 0; i < FPS_OPTIONS.length; i++) {
-            if (FPS_OPTIONS[i] <= fps) best = i;
-        }
-        return best >= 0 ? best : 0;
+    /** 自适应帧率上限（0=不设限）。唯一写入点是 maybeAdaptForNextSession 与「手动改帧率清空」。 */
+    private int fpsCap() {
+        return getSharedPreferences(PREF_NAME, MODE_PRIVATE).getInt(KEY_FPS_CAP, 0);
     }
 
     /** 刷新画质卡里的“车机画布 / 实际编码”状态。只在主线程调用。 */
@@ -953,7 +956,9 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                 // Car+ 会话计时段：进入 STREAMING 记起点；回到终态时按实测帧率给
                 // 「下一次连接」做自适应（AdaptiveResolution，有迟滞、只在阶梯上走一档）。
                 if (s == HuClient.State.STREAMING) {
-                    if (streamingSinceMs == 0) streamingSinceMs = System.currentTimeMillis();
+                    // 每轮会话重新起表：自动重连后 frameCount 会清零，
+                    // 沿用上一轮的起点会让「帧数 ÷ 时长」系统性偏低 → 必然误降档。
+                    streamingSinceMs = System.currentTimeMillis();
                 } else if (s == HuClient.State.IDLE || s == HuClient.State.ERROR
                         || s == HuClient.State.CLOSED) {
                     maybeAdaptForNextSession();

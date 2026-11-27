@@ -1,5 +1,7 @@
 package com.carbridge.carplay.core;
 
+import com.carbridge.carplay.util.Diag;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -155,10 +157,19 @@ public final class AirPlayInfo {
             if (!(d instanceof Map)) continue;
             @SuppressWarnings("unchecked")
             Map<String, Object> dm = (Map<String, Object>) d;
-            info.displays.add(new Display(
-                    asInt(dm.get("widthPixels"), 0),
-                    asInt(dm.get("heightPixels"), 0),
-                    asString(dm.get("uuid")),
+            // 车机字段命名不完全统一：有的用 widthPixels/heightPixels，有的直接
+            // width/height。以前只认前者，缺字段时造出 0×0 Display —— 它「看起来存在」，
+            // 会绕过「displays 为空」的重试与 1200x512 兜底，画布就按 0×0 走。
+            int w = asInt(dm.get("widthPixels"), 0);
+            int h = asInt(dm.get("heightPixels"), 0);
+            if (w <= 0) w = asInt(dm.get("width"), 0);
+            if (h <= 0) h = asInt(dm.get("height"), 0);
+            if (w <= 0 || h <= 0) {
+                Diag.w("AirPlayInfo.displays",
+                        new IllegalStateException("display 缺尺寸（w=" + w + " h=" + h + "），跳过"));
+                continue;
+            }
+            info.displays.add(new Display(w, h, asString(dm.get("uuid")),
                     asInt(dm.get("maxFPS"), 30)));
         }
 

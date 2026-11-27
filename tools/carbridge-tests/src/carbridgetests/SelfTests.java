@@ -402,16 +402,23 @@ public final class SelfTests {
 
         // 自动适配：跟随车机画布
         int[] a = com.carbridge.app.QualityPrefs.paramsForStart(
-                true, 1920, 720, 30, 1280, 720, 3);
+                true, 1920, 720, 30, 1280, 720, 3, 0);
         check(a[0] == 1920 && a[1] == 720 && a[2] == 30, "自动模式跟随车机 1920x720@30");
         // 手动：用自己填的
         int[] b = com.carbridge.app.QualityPrefs.paramsForStart(
-                false, 1920, 720, 30, 1280, 720, 3);
+                false, 1920, 720, 30, 1280, 720, 3, 0);
         check(b[0] == 1280 && b[1] == 720 && b[2] == 60, "手动模式用手填 1280x720@60");
         // 车机画布未知：回落自填
         int[] c = com.carbridge.app.QualityPrefs.paramsForStart(
-                true, 0, 0, 0, 1280, 720, 0);
+                true, 0, 0, 0, 1280, 720, 0, 0);
         check(c[0] == 1280 && c[2] == 20, "无车机画布时回落到自填 + 档位 0");
+        // 自适应帧率上限：autoFit 模式把车机 60fps 压到 45，手动模式不受影响
+        int[] d = com.carbridge.app.QualityPrefs.paramsForStart(
+                true, 1920, 720, 60, 1280, 720, 3, 45);
+        check(d[2] == 45, "autoFit + 上限 45 → 请求 45fps（第 14 批修复）");
+        int[] e2 = com.carbridge.app.QualityPrefs.paramsForStart(
+                false, 1920, 720, 60, 1280, 720, 3, 45);
+        check(e2[2] == 60, "手动模式不受上限影响");
     }
 
     // ---------------------------------------------------------------- 步骤链
