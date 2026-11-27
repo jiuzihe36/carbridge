@@ -90,6 +90,8 @@ public final class HuClient {
 
     private static final String TAG = "carbridge/HuClient";
     private static final int HU_SLOTS = 6;
+    /** 每条通道一把专用写锁（见 send()）。 */
+    private final Object[] sendLocks = new Object[HU_SLOTS];
 
     private final Context ctx;
     private final Sink sink;
@@ -141,14 +143,10 @@ public final class HuClient {
             new java.util.concurrent.atomic.AtomicReferenceArray<>(HU_SLOTS);
     private volatile int[] activePorts = HuProto.WIFI_PORTS;
     private volatile boolean videoReading;
-    /** 音乐音频最后一次到达的时刻：用于判断「音乐是不是正闲着」。 */
-    private volatile long lastMediaAudioAtMs;
-    /** 「语音通道有数据」只打一次（两条通道共用）。 */
+    /** 「语音通道有数据」每会话只打一次（两条通道共用；closeAll 换代时归零）。 */
     private volatile int voiceLogged;
     /** 每条语音通道是否已经在读（9241/9242 各一个）。 */
     private final boolean[] voiceReading = new boolean[2];
-    /** 音乐在播时被丢弃的导航语音包数（诊断用）。 */
-    private volatile long ttsDropped;
 
     /** 收到的空帧（len=0）计数：CarLife 用它们当心跳，不能当故障。 */
     private volatile long emptyFrames;
@@ -386,6 +384,9 @@ public final class HuClient {
     public HuClient(Context ctx, Sink sink) {
         this.ctx = ctx.getApplicationContext();
         this.sink = sink;
+        for (int i = 0; i < sendLocks.length; i++) {
+            sendLocks[i] = new Object();
+        }
     }
 
     // ------------------------------------------------------------- 配置
@@ -644,6 +645,7 @@ public final class HuClient {
         // 而日志里一点异常都没有。
         voiceReading[0] = false;
         voiceReading[1] = false;
+        voiceLogged = 0;             // 「语音通道有数据」每会话打一次：换代时归零
         mediaGen++;                    // 换代：旧的媒体读取线程据此自行退出、且不再动标志
         hbGen++;                       // 让这一轮的心跳线程自己退出
         startScheduled = false;        // 取消还没发出的 START
@@ -1356,7 +1358,9 @@ public final class HuClient {
     /** Car+ 的 6 个监听端口当前有几个在听 —— 「对端服务还在不在」的硬证据。 */
     private int alivePorts() {
         int alive = 0;
-        for (int p : HuProto.WIFI_PORTS) {
+        // ⚠️ 扫的必须是**本会话实际用的那组**端口：Car+ 只开 LOCAL(USB/ADB) 组时
+        //    会话落在 LOCAL_PORTS 上，扫 WIFI_PORTS 恒为 0 → 被误判「对端已死」误拆会话。
+        for (int p : activePorts) {
             if (probePort(p)) {
                 alive++;
             }
@@ -1767,7 +1771,7 @@ public final class HuClient {
                     // 「读不到」有两条路：**异常**（RST 硬拒 / 本端 closeAll）走这里，
                     // **返回 null** = 对端正常 FIN。以前 readN 把两者吞成同一句
                     // 「视频通道关闭」，导致手机主动收流 vs 手机硬拒无法区分。
-                    if (running) {
+                    if (running && gen == mediaGen) {
                         log(String.valueOf(t).contains("Socket closed")
                                 ? "视频通道被本端关闭（会话已在别处拆掉）"
                                 : "视频通道读异常，重启会话：" + t);
@@ -1776,7 +1780,7 @@ public final class HuClient {
                     return;
                 }
                 if (head == null) {
-                    if (running) {
+                    if (running && gen == mediaGen) {
                         log("视频通道被对端 FIN 关闭，重启会话");
                         closeAll();
                     }
@@ -1896,9 +1900,14 @@ public final class HuClient {
                     // ⚠️ 不能裸 return：线程退出后 audioReading 会被复位，而
                     //    startAudioReader() 只在「开始推流」那一步调用一次 → 没人再起线程，
                     //    9240 不再被读，接收缓冲填满反压 Car+ 写线程。画面正常、车机永久无声。
-                    log("音频通道不存在 → 判链路故障并重建会话");
-                    markFault(Fault.EOF);
-                    closeAll();
+                    // ⚠️ 必须带 gen 守卫：closeAll() 先 mediaGen++ 再清空 socks，
+                    //    旧代线程在「while 通过」与「get(2)」之间被换代时会读到 null ——
+                    //    无守卫就给新会话贴上 EOF 定性并把它一起拆掉（连环重连）。
+                    if (running && gen == mediaGen) {
+                        log("音频通道不存在 → 判链路故障并重建会话");
+                        markFault(Fault.EOF);
+                        closeAll();
+                    }
                     return;
                 }
                 byte[] head = readN(s, 12);
@@ -1952,7 +1961,9 @@ public final class HuClient {
                 }
                 dataPkts++;
                 bytes += len;
-                lastMediaAudioAtMs = System.currentTimeMillis();
+                // 音频帧也是「链路还活着」的证据：视频静止（Car+ 只发空帧）而音乐在走时，
+                // 只刷视频侧的活性会让外层观察窗误判停滞拆会话。
+                lastRxAtMs = System.currentTimeMillis();
                 if (dataPkts == 1) {
                     log("★ 音频数据首包 len=" + len + " ts=" + ts
                             + " 头 " + HuProto.hex(payload, 16));
@@ -2382,17 +2393,21 @@ public final class HuClient {
      *
      * @return true=写成功；false=通道为空或写失败（对端可能已断）
      */
-    private synchronized boolean send(int slot, int serviceType, byte[] body) {
+    private boolean send(int slot, int serviceType, byte[] body) {
         Socket s = socks.get(slot);
         if (s == null) {
             return false;
         }
         try {
-            OutputStream out = s.getOutputStream();
-            byte[] framed = HuProto.frame(HuProto.CHANNELS[slot], serviceType, body);
-            out.write(framed);
-            out.flush();
-            trace("TX", slot, serviceType, body);
+            // ⚠️ 每条通道一把专用写锁：任一通道写阻塞（对端不读、发送缓冲满）
+            //    不能把心跳和别的通道的 CMD 应答一起冻住（整会话僵死的同源坑）。
+            synchronized (sendLocks[slot]) {
+                OutputStream out = s.getOutputStream();
+                byte[] framed = HuProto.frame(HuProto.CHANNELS[slot], serviceType, body);
+                out.write(framed);
+                out.flush();
+                trace("TX", slot, serviceType, body);
+            }
             return true;
         } catch (Throwable t) {
             log("发送失败（service=" + serviceType + "）：" + t);

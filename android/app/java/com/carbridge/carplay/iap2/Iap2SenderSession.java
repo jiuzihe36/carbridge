@@ -74,8 +74,13 @@ public final class Iap2SenderSession {
         }
     }
 
-        /**
+    /**
      * MFi 挑战长度回退序列。
+     *
+     * <p>⚠️ 没有 universally 安全的首发长度：DiPlay（Carlinkit AuthV3 EC 身份）只接受精确
+     * 32B，收到 20B 直接断链；奥迪 MIB3 反过来，对 32B 静默/拆链、对 20B 秒答。
+     * 所以顺序本身保护不了任何一端，真正的保险是「被拒档位记忆」（{@link #REJECTED_CHALLENGE_LEVELS}：
+     * 挑战在途时链路被拆 → 记住本档，下条链路跳过）。本车（Chery）实测首发 20B 即应答，保持现状。
      */
     private static final int[] CHALLENGE_LENGTHS = {20, 32, 16};
     /** 每个档位的等待时长（与 CHALLENGE_LENGTHS 一一对应）。 */
@@ -105,7 +110,13 @@ public final class Iap2SenderSession {
     private volatile int challengeIndex = -1;
     private volatile boolean challengeSent;
     private volatile long challengeSentAtMs;
-    private int rejectedChallengeLevel = -1;  // 记住被拒的档位，本进程内跳过
+    /**
+     * 被拒的挑战长度档位（**进程级**静态记忆）：会话每轮新建，实例字段会随着会话销毁
+     * 丢失记忆 → 下轮又从被拒的档位发起 → 永久失败循环。static 才能跨会话生效。
+     * 只在「挑战在途时链路被对端拆掉」时记录（这是「这个长度把对端打死了」的强信号）。
+     */
+    private static final java.util.Set<Integer> REJECTED_CHALLENGE_LEVELS =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
     /**
      * 是否验证车机 MFi 签名（严格模式）。
      *
@@ -144,16 +155,17 @@ public final class Iap2SenderSession {
     /** 认证后是否真的等到了 0x5703 / 0x4301。 */
     private volatile boolean wifiConfigSeen;
     private volatile boolean endpointSeen;
-    /** 设备状态问候 / 0x4300 只发一次。 */
-    private boolean greeted;
+    /** 设备状态问候 / 0x4300 每条链路只发一次（onLinkUp 重同步时归零）；跨线程读写 → volatile。 */
+    private volatile boolean greeted;
     /**
-     * 0x4300（CarPlayAvailability）每轮会话**至多一次**。
+     * 0x4300（CarPlayAvailability）每轮凭据**至多一次**。
      *
      * <p>它是「询问车机能否开始 CarPlay」的全局请求，不是可重放的订阅：
      * 超时兜底和晚到的 0x5703 都会走到发送点，没有闸门时同一轮会发两条语义相同的请求。
      * 车机对这种重复请求没有定义行为（mcarplay 在真车上有过 0x4300 不再 ACK 的记录）。
+     * 「一轮」= 一份 0x5703 凭据：新一轮凭据到达时闸门重置（见 onWifiConfiguration）。
      */
-    private boolean carPlayAvailabilitySent;
+    private volatile boolean carPlayAvailabilitySent;
     /** 车机在 0x1D01 里声明「能收哪些手机消息」（id 0x0007）。 */
     private final java.util.Set<Integer> accessoryAccepts = new java.util.HashSet<Integer>();
     /** 车机在 0x1D01 里声明「它会发哪些消息」（id 0x0006）。 */
@@ -174,7 +186,14 @@ public final class Iap2SenderSession {
                 //    上层据此以为「还连着」，于是不重连、也不再发任何东西 —— 现场表现就是
                 //    「画面停住、日志里最后一句是收到某条消息」。（假车机测试台一次跑出来的）
                 if (s == Iap2LinkEngine.State.NORMAL) onLinkUp();
-                else if (s == Iap2LinkEngine.State.CLOSED) setState(State.CLOSED);
+                else if (s == Iap2LinkEngine.State.CLOSED) {
+                    // 挑战在途时链路被拆 = 这个长度把对端打死了（DiPlay 实录：收到 20B 直接断链）。
+                    // 记住本档（进程级），下条链路直接跳过它，否则每轮都从同一档发起 = 永久失败循环。
+                    if (state == State.AUTHENTICATING && challengeSent) {
+                        rejectCurrentChallengeLevel();
+                    }
+                    setState(State.CLOSED);
+                }
             }
             @Override public void onMessage(Iap2Csm.Message m) {
                 linkListener.onMessage(m);
@@ -333,12 +352,21 @@ public final class Iap2SenderSession {
      *
      * <p>外层是一个参数组：id=1，值里是「标志(0)=1」和「蓝牙 MAC(1)」。
      */
+    /**
+     * 0x4300 发送闸门（原子过闸）：onWifiConfigTimeout（定时器线程）与
+     * onWifiConfiguration（iAP2 读线程）会并发到达这里，非原子的检查+置位会双发。
+     */
+    private synchronized boolean claimCarPlayAvailability() {
+        if (carPlayAvailabilitySent) return false;
+        carPlayAvailabilitySent = true;
+        return true;
+    }
+
     private void sendCarPlayAvailability() {
-        if (carPlayAvailabilitySent) {
+        if (!claimCarPlayAvailability()) {
             log("0x4300 本轮已发过，跳过重复请求");
             return;
         }
-        carPlayAvailabilitySent = true;
         sendDeviceGreeting();
         byte[] body = Iap2Csm.group(1,
                 Iap2Csm.u8(0, 1),
@@ -379,6 +407,15 @@ public final class Iap2SenderSession {
     // ================================================================== 链路起来后
 
     private void onLinkUp() {
+        // 每轮链路的「只发一次」标志全部归零：重同步（对端重启链路层）后
+        // 车机等的是一次完整的重新识别 + 问候，沿用旧标志它永远等不到。
+        greeted = false;
+        carPlayAvailabilitySent = false;
+        wifiConfigSeen = false;
+        endpointSeen = false;
+        challengeIndex = -1;
+        challengeSent = false;
+        challengeToken++;            // 作废上一轮还没跑完的挑战定时器
         setState(State.IDENTIFYING);
         engine.sendCsm(Iap2Ids.START_IDENTIFICATION, new byte[0]);
         // 识别看门狗：车机 15s 内不回 0x1D01，说明链路通了但它不说话（或说了我们解析不了）。
@@ -445,8 +482,10 @@ public final class Iap2SenderSession {
                 answerBluetoothConnections();
                 break;
             case Iap2Ids.START_CALL_STATE_UPDATES:
-                engine.sendCsm(Iap2Ids.CALL_STATE_UPDATE, Iap2Csm.u8(2, 0));
-                log("应答 CallStateUpdate (0x4155) = Disconnected");
+                // 应答要报**当前真实状态**：车机订阅瞬间若正在通话，
+                // 报 Disconnected 会让它的通话 UI / 音频路由走反。
+                engine.sendCsm(Iap2Ids.CALL_STATE_UPDATE, Iap2Csm.u8(2, phoneCallActive ? 1 : 0));
+                log("应答 CallStateUpdate (0x4155) = " + (phoneCallActive ? "通话中" : "Disconnected"));
                 break;
             case Iap2Ids.IDENTIFICATION_REJECTED:
                 // 车机拒绝我们的识别信息（多半是设备信息/HW 标识对不上）
@@ -686,19 +725,23 @@ public final class Iap2SenderSession {
                        : "未解析出公钥")
                     + (peerCertApple ? " · Apple OID 体系" : " · 非 Apple OID（自制/占位证书）"));
         }
-        if (!challengeSent) {
+        // 认证已完成（challengeSent 已复位）后车机重发 0xAA01 时不能再发挑战；
+        // 只有还在认证中才允许发起/续发挑战。
+        if (!challengeSent && state == State.AUTHENTICATING) {
             sendNextChallenge();
         }
     }
 
     /**
-     * 发一个 MFi 挑战。**长度必须回退 32→20→16**：
-     * DiPlay（Carlinkit AuthV3 EC 身份）只接受精确 32B，收到 20B 直接断链；
-     * 奥迪 MIB3 对 32B 静默/拆链，对 20B 秒答。顺序反了会打死 DiPlay。
+     * 发一个 MFi 挑战。**没有 universally 安全的首发长度**（DiPlay 只收 32B、奥迪只收 20B，
+     * 见 CHALLENGE_LENGTHS 上的注释），靠档位回退 + 被拒档位进程级记忆收敛。
+     *
+     * <p>synchronized：onAuthCertificate（读线程）与 retryChallenge（定时器线程）会并发
+     * 到达，非同步的「if (!challengeSent) → 发」会双发挑战，验签必失败。
      */
-    private void sendNextChallenge() {
+    private synchronized void sendNextChallenge() {
         int idx = challengeIndex + 1;
-        while (idx < CHALLENGE_LENGTHS.length && idx == rejectedChallengeLevel) idx++;
+        while (idx < CHALLENGE_LENGTHS.length && REJECTED_CHALLENGE_LEVELS.contains(idx)) idx++;
         if (idx >= CHALLENGE_LENGTHS.length) {
             log("MFi 挑战长度全部被拒，放弃认证");
             // ⚠️ 以前这里只是 return：状态永远停在 AUTHENTICATING，
@@ -850,6 +893,15 @@ public final class Iap2SenderSession {
         }
         log("收到 0x5703：" + cfg);
         listener.onWifiConfig(cfg);
+        if (state == State.READY) {
+            // 没主动再要过凭据时晚到的重复 0x5703（重请求应答等）：只更新凭据，
+            // 不把 READY 打回 STARTING_SESSION、也不重发 0x4300（上层在恢复期会重复入网）。
+            log("已在 READY，晚到的 0x5703 只更新凭据（不动状态、不重发 0x4300）");
+            return;
+        }
+        // 新一轮凭据（首轮或恢复期的主动重要）：0x4300 闸门按「每轮凭据一次」重置，
+        // 否则恢复期永远发不出第二条 0x4300、车机不会回 0x4301。
+        carPlayAvailabilitySent = false;
         setState(State.STARTING_SESSION);
         sendCarPlayAvailability();
     }
@@ -995,8 +1047,10 @@ public final class Iap2SenderSession {
 
     /** 把 MFi 挑战档位标记为被拒（对端拆链时调用），下次直接跳过。 */
     public void rejectCurrentChallengeLevel() {
-        rejectedChallengeLevel = challengeIndex;
-        log("标记 MFi 挑战档位 " + CHALLENGE_LENGTHS[challengeIndex] + "B 被拒，后续跳过");
+        int i = challengeIndex;
+        if (i < 0 || i >= CHALLENGE_LENGTHS.length) return;   // 还没发过挑战，没什么可记
+        REJECTED_CHALLENGE_LEVELS.add(i);
+        log("标记 MFi 挑战档位 " + CHALLENGE_LENGTHS[i] + "B 被拒（进程级记忆），后续会话跳过");
     }
 
     /** 暴露：每个档位的超时，供驱动线程做回退。 */

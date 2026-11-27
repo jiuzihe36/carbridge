@@ -177,6 +177,26 @@ public final class CarPlayWirelessTx {
 
     public synchronized void start() {
         if (state != State.IDLE && state != State.ERROR) return;
+        if (state == State.ERROR) {
+            // ⚠️ 从 ERROR 重入必须先清上一轮的残留（与 stop() 的资源清理对称）：
+            //    旧 btServer 仍在跑（会再回调 onCarConnected 破坏单会话不变量）、
+            //    旧 iap2 的 authTimer 还活着、旧 RFCOMM socket 不关车机不再重连 ——
+            //    以前直接盖过去，永久卡在「等待车机回连」。
+            if (mdns != null) { mdns.shutdown(); mdns = null; }
+            if (ctrlServer != null) { ctrlServer.stop(); ctrlServer = null; }
+            if (wifi != null) { wifi.release(); wifi = null; }
+            if (iap2 != null) { iap2.close(); iap2 = null; }
+            if (btServer != null) { btServer.stop(); btServer = null; }
+            BluetoothSocket stale = activeSocket;
+            activeSocket = null;
+            if (stale != null) {
+                try {
+                    stale.close();
+                } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("CarPlayWirelessTx", t); }
+            }
+            airplaySessionActive = false;
+            networkPrepared = false;
+        }
         setState(State.LISTENING_BT);
         enterStep(Step.BT_LISTEN);
         BtIdentity.Resolved identity = BtIdentity.resolve(ctx);
@@ -383,7 +403,13 @@ public final class CarPlayWirelessTx {
      */
     private void onCarStream(final InputStream in, final OutputStream out,
                              String peerAddr, String peerName) {
-        setState(State.IAP2);
+        // ⚠️ 推流中（airplaySessionActive）车机蓝牙回连是**设计内**场景（车机连上无线
+        //    CarPlay 后会关蓝牙再开回来）：此时不能把 state 从 AIRPLAY 打回 IAP2，
+        //    否则 onCarPlayEndpoint 的防重入被绕过 → 起第二条并发 AirPlay 会话 →
+        //    车机把两条全 reset。
+        if (!airplaySessionActive) {
+            setState(State.IAP2);
+        }
         enterStep(Step.IAP2_LINK);
         scheduleIap2StallWatchdog();
         // 每条新链路都是一次新机会：入网重试预算属于「本轮会话」，不该跨轮累计。
@@ -502,6 +528,18 @@ public final class CarPlayWirelessTx {
             }
             session.start();
             readLoop(in, session);
+            // ⚠️ 链路层握手（SYN/SYN|ACK → NORMAL）没有超时：半死 socket 上引擎永远
+            //    停在 DETECTING、读循环永久阻塞，而车机自认为已连上不会再来。
+            //    8 秒还没进 IDENTIFYING（onLinkUp 才置）就拆掉这条半死链路，等车机重连。
+            main.postDelayed(new Runnable() {
+                @Override public void run() {
+                    if (iap2 != session) return;   // 已被更新的会话替换，别误伤
+                    if (session.state() == Iap2SenderSession.State.IDLE) {
+                        log("⚠ iAP2 链路握手 8s 未完成 → 拆掉半死链路，等车机重连");
+                        onLinkLost("iAP2 握手超时");
+                    }
+                }
+            }, 8000);
         } catch (Throwable t) {
             // ⚠️ 这里必须走 onLinkLost（它会 sessionEnded + 关 socket），
             //    只置 ERROR 的话蓝牙层会一直认为「已有会话」→ 车机再连被静默丢弃。
@@ -632,8 +670,10 @@ public final class CarPlayWirelessTx {
                         if (btServer != null) btServer.notifyRx();
                         byte[] chunk = new byte[n];
                         System.arraycopy(buf, 0, chunk, 0, n);
-                        Iap2SenderSession s = iap2;
-                        if (s != null) s.onBytes(chunk);
+                        // ⚠️ 必须喂给**本会话**（闭包），不能读 iap2 字段：换代窗口里
+                        //    旧 socket 来字节时 iap2 已指向新会话，旧链路的帧（序号体系
+                        //    不同）会污染新会话状态机。旧会话引擎已 CLOSED，会自然丢弃。
+                        session.onBytes(chunk);
                     } catch (Exception e) {
                         if (state != State.IDLE) log("iAP2 读失败: " + e);
                         break;
@@ -840,6 +880,9 @@ public final class CarPlayWirelessTx {
             return;
         }
         // 车机回 0x5703 → onWifiCredentials → scheduleWifiJoin（会顶掉这个兜底）
+        // ⚠️ 先摘掉在途的同一任务：Handler 允许同实例重复入队，两个入网任务并存会让
+        //    后到的 wifi.release() 把前一个进行中的 joiner 杀掉（抖动一次烧光重试预算）。
+        main.removeCallbacks(wifiJoinTask);
         main.postDelayed(wifiJoinTask, 3000L);
         log("已请求新的热点凭据（" + reason + "），3 秒后兜底再入网");
     }
@@ -1011,7 +1054,9 @@ public final class CarPlayWirelessTx {
     private void onCarPlayEndpoint(String host, int port) {
         // ⚠️ mDNS 每次发现/刷新都会回调，不加防重入会同时起多个 AirPlaySession，
         // 车机会把并发连接全 reset（实测 4 个并发 → 全 Connection reset）。
-        if (state == State.AIRPLAY) {
+        // ⚠️ 判据必须是 airplaySessionActive 而不只是 state：推流中车机蓝牙回连会把
+        //    state 从 AIRPLAY 打回 IAP2（见 onCarStream），只看 state 防重入就失效。
+        if (state == State.AIRPLAY || airplaySessionActive) {
             log("已在 AIRPLAY 阶段，忽略重复端点 " + host + ":" + port);
             return;
         }

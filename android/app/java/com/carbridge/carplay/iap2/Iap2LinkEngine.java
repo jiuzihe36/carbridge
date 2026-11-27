@@ -49,6 +49,23 @@ public final class Iap2LinkEngine {
     private Iap2LinkPacket.LinkConfig peerConfig;
     private boolean peerDetected;
     private boolean sentSyn;
+    /** 握手完成前被丢弃的数据帧数（限流日志用）。 */
+    private int preNormalDataDrops;
+
+    /**
+     * 对端不重开 RFCOMM、直接重启链路层（重同步）：序号全部复位，状态强制退回
+     * NEGOTIATING —— 随后的 NORMAL 迁移才会重新触发 onLinkUp，会话层借此把
+     * 每轮一次性标志（问候/0x4300/挑战）归零、重新识别。不复位的话双方序号错位互丢，
+     * 链路活着但消息全停（「画面停住」的同源形态）。
+     */
+    private void resetForResync(String why) {
+        log("⚠ 已在 NORMAL 时收到 " + why + "：对端重同步 → 复位序号并重握手");
+        txSeq = 99;
+        lastSentSeq = 98;
+        sentSyn = false;
+        state = State.NEGOTIATING;   // 直接写字段+通知：setState 对同值迁移不触发
+        listener.onState(State.NEGOTIATING);
+    }
 
     public Iap2LinkEngine(Transport transport, Listener listener, Role role) {
         this.transport = transport;
@@ -151,6 +168,7 @@ public final class Iap2LinkEngine {
 
         if (syn && !ack) {
             // 对端发起 SYN
+            if (state == State.NORMAL) resetForResync("SYN");
             peerConfig = Iap2LinkPacket.LinkConfig.decode(p.payload);
             adoptSessions(peerConfig);
             rxExpected = (p.seq + 1) & 0xFF;
@@ -166,6 +184,7 @@ public final class Iap2LinkEngine {
         }
 
         if (syn && ack) {
+            if (state == State.NORMAL) resetForResync("SYN|ACK");
             peerConfig = Iap2LinkPacket.LinkConfig.decode(p.payload);
             adoptSessions(peerConfig);
             rxExpected = (p.seq + 1) & 0xFF;
@@ -189,7 +208,16 @@ public final class Iap2LinkEngine {
         }
 
         // 数据帧
-        if (rxExpected >= 0 && p.seq != rxExpected) {
+        if (state != State.NORMAL || rxExpected < 0) {
+            // 握手没完成前的数据帧一律不收：换代窗口里旧 socket 的字节（序号体系是旧的）
+            // 不能进新会话的状态机 —— 否则序号错位，双方互丢，链路活着但消息全停。
+            if (preNormalDataDrops < 3) {
+                preNormalDataDrops++;
+                log("丢弃握手未完成前到达的数据帧（state=" + state + "）");
+            }
+            return;
+        }
+        if (p.seq != rxExpected) {
             log("乱序包 seq=" + p.seq + " 期望 " + rxExpected + "，丢弃并重 ACK");
             sendAckOnly((rxExpected - 1) & 0xFF);
             return;

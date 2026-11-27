@@ -101,7 +101,14 @@ public final class Iap2Csm {
                     continue;
                 }
                 int total = Iap2LinkPacket.getShortBE(all, off + 2);
-                if (total < FRAME_HEADER_SIZE || off + total > all.length) break;
+                if (total < FRAME_HEADER_SIZE) {
+                    // 坏长度字段（比帧头还短）永远拼不出合法帧：跳过一个字节继续找帧头，
+                    // 否则解析从此停在坏字节处，后续所有合法帧全部积压到缓冲截断。
+                    off++;
+                    dropped++;
+                    continue;
+                }
+                if (off + total > all.length) break;   // 半帧：等更多数据
                 byte[] one = new byte[total];
                 System.arraycopy(all, off, one, 0, total);
                 out.add(parse(one));

@@ -478,6 +478,8 @@ public final class CarAudioRouter {
             AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
             if (am == null) return;
             AudioDeviceInfo cur = am.getCommunicationDevice();
+            // 先摘掉残留的重试：通话已结束，迟到的重试会把 SCO 重新钉回车机
+            cancelCommunicationDeviceRetry();
             am.clearCommunicationDevice();
             emit(log, "通话音频：通话结束，已还原默认通话设备（之前是 "
                     + (cur == null ? "无" : cur.getType() + "@" + cur.getAddress()) + "）");
@@ -486,6 +488,17 @@ public final class CarAudioRouter {
         }
     }
 
+
+    /** 通话设备重试链的挂起任务（通话结束时必须摘掉，否则残留重试会把 SCO 重新钉回车机）。 */
+    private static final Handler COMM_HANDLER = new Handler(Looper.getMainLooper());
+    private static Runnable pendingCommRetry;
+
+    /** 取消残留的通话设备重试（通话结束/清除设备时调用）。 */
+    public static void cancelCommunicationDeviceRetry() {
+        Runnable r = pendingCommRetry;
+        pendingCommRetry = null;
+        if (r != null) COMM_HANDLER.removeCallbacks(r);
+    }
 
     /**
      * 带重试地把车机设为通话设备。
@@ -496,14 +509,22 @@ public final class CarAudioRouter {
     public static void setCommunicationDeviceRetry(final Context ctx, final BluetoothDevice car,
                                                    final Log log, final int attemptsLeft) {
         if (Build.VERSION.SDK_INT < 31 || car == null) return;
-        if (isCommunicationDevice(ctx, car)) return;   // 已经是车机，不用再试
+        if (isCommunicationDevice(ctx, car)) {
+            pendingCommRetry = null;
+            return;   // 已经是车机，不用再试
+        }
         setCommunicationDevice(ctx, car, log);
-        if (attemptsLeft <= 0) return;
-        new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+        if (attemptsLeft <= 0) {
+            pendingCommRetry = null;
+            return;
+        }
+        Runnable r = new Runnable() {
             @Override public void run() {
                 setCommunicationDeviceRetry(ctx, car, log, attemptsLeft - 1);
             }
-        }, 800);
+        };
+        pendingCommRetry = r;
+        COMM_HANDLER.postDelayed(r, 800);
     }
 
     /** 当前通话设备是否就是这台车机。 */
@@ -543,6 +564,9 @@ public final class CarAudioRouter {
      * <p>为什么需要：我们把通话声另外采一份送去车机，但系统仍然会把通话音频
      * 从听筒/扬声器放出来 —— 两者是并行的，不会因为我们「也发了一份」就静音。
      * 真 iPhone 是被系统整体改路由，第三方只能退一步：送车机的同时把本地音量压到 0。
+     *
+     * <p>⚠️ 原音量必须**落 SharedPreferences**（与铃声同款）：进程在通话中被杀时
+     * stop()/恢复路径都不会跑，只存内存变量 = 手机通话音量永久为 0。
      */
     public static void setVoiceCallMuted(Context ctx, boolean muted, Log log) {
         try {
@@ -551,6 +575,7 @@ public final class CarAudioRouter {
             if (muted) {
                 if (savedVoiceVolume < 0) {
                     savedVoiceVolume = am.getStreamVolume(AudioManager.STREAM_VOICE_CALL);
+                    saveVoiceVolume(ctx, savedVoiceVolume);
                 }
                 // 优先用 ADJUST_MUTE：它走的是「静音开关」，比 setStreamVolume(0) 更可能真的静音
                 // （很多机型把音量设 0 只是压到最小档，仍然出声）。
@@ -572,6 +597,7 @@ public final class CarAudioRouter {
                             + am.getStreamVolume(AudioManager.STREAM_VOICE_CALL)
                             + "，原 " + savedVoiceVolume + "）");
                     savedVoiceVolume = -1;
+                    clearVoiceVolume(ctx);
                 }
             }
         } catch (Throwable t) {
@@ -614,8 +640,61 @@ public final class CarAudioRouter {
         setLocalRingMuted(ctx, false, log);
     }
 
+    private static void saveVoiceVolume(Context ctx, int v) {
+        try {
+            ctx.getApplicationContext().getSharedPreferences(PREF_RING, Context.MODE_PRIVATE)
+                    .edit().putInt(KEY_VOICE_VOLUME, v).apply();
+        } catch (Throwable tDiag) {
+            Diag.w("CarAudioRouter.saveVoiceVolume", tDiag);
+        }
+    }
+
+    private static void clearVoiceVolume(Context ctx) {
+        try {
+            ctx.getApplicationContext().getSharedPreferences(PREF_RING, Context.MODE_PRIVATE)
+                    .edit().remove(KEY_VOICE_VOLUME).apply();
+        } catch (Throwable tDiag) {
+            Diag.w("CarAudioRouter.clearVoiceVolume", tDiag);
+        }
+    }
+
+    /**
+     * App 启动时调用：如果上次是被系统杀掉、没来得及恢复铃声，这里补一次。
+     *
+     * <p>没有这一步，用户会碰到「手机突然没声音了，怎么都调不出来」。
+     */
+    public static void restoreIfMutedOnStart(Context ctx, Log log) {
+        try {
+            int v = ctx.getApplicationContext().getSharedPreferences(PREF_RING, Context.MODE_PRIVATE)
+                    .getInt(KEY_RING_VOLUME, -1);
+            if (v >= 0) {
+                AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
+                if (am != null && am.getStreamVolume(AudioManager.STREAM_RING) == 0) {
+                    am.setStreamVolume(AudioManager.STREAM_RING, v, 0);
+                    emit(log, "通话音频：上次退出时没恢复铃声，已补恢复到 " + v);
+                }
+                clearRingVolume(ctx);
+            }
+            // 通话音量同款兜底：进程在通话中被杀时静音恢复路径不会跑，不补就永久为 0
+            int vv = ctx.getApplicationContext().getSharedPreferences(PREF_RING, Context.MODE_PRIVATE)
+                    .getInt(KEY_VOICE_VOLUME, -1);
+            if (vv >= 0) {
+                AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
+                if (am != null && am.getStreamVolume(AudioManager.STREAM_VOICE_CALL) == 0) {
+                    am.adjustStreamVolume(AudioManager.STREAM_VOICE_CALL, AudioManager.ADJUST_UNMUTE, 0);
+                    am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, vv, 0);
+                    emit(log, "通话音频：上次退出时没恢复通话音量，已补恢复到 " + vv);
+                }
+                clearVoiceVolume(ctx);
+            }
+        } catch (Throwable t) {
+            emit(log, "通话音频：补恢复铃声失败: " + t);
+        }
+    }
     private static final String PREF_RING = "carbridge_ring";
     private static final String KEY_RING_VOLUME = "ring_volume";
+    /** 通话音量与铃声共用同一个 pref 文件（都是「被杀后补恢复」的兜底）。 */
+    private static final String KEY_VOICE_VOLUME = "voice_call_volume";
 
     private static void saveRingVolume(Context ctx, int v) {
         try {
@@ -632,28 +711,6 @@ public final class CarAudioRouter {
                     .edit().remove(KEY_RING_VOLUME).apply();
         } catch (Throwable tDiag) {
             Diag.w("CarAudioRouter.clearRingVolume", tDiag);
-        }
-    }
-
-    /**
-     * App 启动时调用：如果上次是被系统杀掉、没来得及恢复铃声，这里补一次。
-     *
-     * <p>没有这一步，用户会碰到「手机突然没声音了，怎么都调不出来」。
-     */
-    public static void restoreIfMutedOnStart(Context ctx, Log log) {
-        try {
-            int v = ctx.getApplicationContext().getSharedPreferences(PREF_RING, Context.MODE_PRIVATE)
-                    .getInt(KEY_RING_VOLUME, -1);
-            if (v < 0) return;
-            AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
-            if (am == null) return;
-            if (am.getStreamVolume(AudioManager.STREAM_RING) == 0) {
-                am.setStreamVolume(AudioManager.STREAM_RING, v, 0);
-                emit(log, "通话音频：上次退出时没恢复铃声，已补恢复到 " + v);
-            }
-            clearRingVolume(ctx);
-        } catch (Throwable t) {
-            emit(log, "通话音频：补恢复铃声失败: " + t);
         }
     }
 
