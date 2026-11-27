@@ -137,9 +137,11 @@ public final class Iap2SenderSession {
     /** 上一次发出的挑战（验签要拿它算 SHA-1 比对）。 */
     private byte[] lastChallenge;
 
-    /** 内建定时器：挑战超时与认证后看门狗，不依赖上层 watchdog。 */
+    /** 内建定时器：挑战超时与认证后看门狗，不依赖上层 watchdog。
+     *  双线程：发挑战的任务可能被蓝牙写堵（对端不读时 RFCOMM 写会阻塞），
+     *  单线程会把识别/认证后两只看门狗一起拖晚。任务间有 token 与状态闸，并发安全。 */
     private final java.util.concurrent.ScheduledExecutorService authTimer =
-            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(
+            java.util.concurrent.Executors.newScheduledThreadPool(2,
                     new java.util.concurrent.ThreadFactory() {
                         @Override public Thread newThread(Runnable r) {
                             Thread t = new Thread(r, "iap2-auth-timer");

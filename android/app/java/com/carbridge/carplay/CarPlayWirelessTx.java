@@ -579,7 +579,12 @@ public final class CarPlayWirelessTx {
             //    EIR 扫描还在跑就再等等它（一次 inquiry 约 12s），
             //    拿到了就用 EIR 的入网；扫完还没有才放弃。
             if (eirOfCar() == null && eirSniffer != null) {
-                log("0x5703 超时未到，等 EIR 扫描的结果（最多再等 " + (EIR_WAIT_MS / 1000) + "s）");
+                // ⚠️ 0x4300 现在就发，别串行等 EIR：车机邀请窗口实测只有 ~20s，
+                //    「8s 超时 + 10s EIR + 2~8s 入网」最坏 26s 必然错过窗口。
+                //    0x4300 先把窗口撑住（车机回 0x4301 带端点），EIR 到了再用它入网。
+                log("0x5703 超时未到：先发 0x4300 撑住邀请窗口，同时等 EIR 扫描（最多再等 "
+                        + (EIR_WAIT_MS / 1000) + "s）");
+                s.onWifiConfigTimeout();
                 main.removeCallbacks(wifiTimeoutFinal);
                 main.postDelayed(wifiTimeoutFinal, EIR_WAIT_MS);
                 return;
@@ -601,14 +606,18 @@ public final class CarPlayWirelessTx {
         public void run() {
             Iap2SenderSession s = iap2;
             if (s == null) return;
-            if (s.state() != Iap2SenderSession.State.REQUESTING_WIFI) return;
             AppleDeviceIe carEir = eirOfCar();
             if (carEir != null && carEir.hasHotspot()) {
                 log("EIR 里有热点信息 → 用 EIR 的入网");
-                s.onWifiConfigTimeout();
                 scheduleWifiJoin(0L);
+                // 0x4300 可能已在 wifiTimeout 提前发过（那时 state 已离开 REQUESTING_WIFI）；
+                // 没发过才补（onWifiConfigTimeout 内部有状态与闸门双重幂等）
+                if (s.state() == Iap2SenderSession.State.REQUESTING_WIFI) {
+                    s.onWifiConfigTimeout();
+                }
                 return;
             }
+            if (s.state() != Iap2SenderSession.State.REQUESTING_WIFI) return;
             log("EIR 也没扫到热点信息，0x5703 与 EIR 都没有凭据");
             s.onWifiConfigTimeout();
         }
