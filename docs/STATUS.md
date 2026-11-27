@@ -4,7 +4,7 @@
 > 证据类型：**实车**（用户车机，按 README 流程）/ **假车机**（tools/fakecar）/ **单测**（tools/carbridge-tests）/ **规范**。
 > 状态变化时与代码同一提交更新本文件。
 
-最后更新：2026-11-24
+最后更新：2026-11-27
 
 ## 链路阶段
 
@@ -26,7 +26,7 @@
 | 音频：媒体通道 | CONFIRMED | 实车 | 音频路由与采集在 `carplay/audio` |
 | 音频：通话 | INFERRED | 实车观察 | 平台限制：第三方 App 无法静音通话流，已改为 **HFP 优先**；不同车机的最终效果仍需逐台确认 |
 | 帧率 / 分辨率自适应 | INFERRED | 实车 + 单测 | 判据为「不低于目标帧率」；实测 Car+ 交付上限约 30fps，上限放开到 120 |
-| 车机一键解锁（ADB 写 `persist.sys.wirelesscarplay.address`） | CONFIRMED | 实车 | 扫网段 → 内置 adb → 写属性回读 → 重启车机 CarPlay 应用 |
+| 车机一键解锁（ADB 写 `persist.sys.wirelesscarplay.address`） | CONFIRMED | 实车 | 扫网段 → 内置 adb → 写属性回读 → 重启车机 CarPlay 应用。⚠️ 0.1.25 修了 adb 客户端不按流 id 过滤、被老 adbd 迟到包串台导致**读数整行错位**的问题——此前「setprop 没生效」的判定不可信，0.1.25+ 的读数才可信 |
 | 假车机（`tools/fakecar`） | CONFIRMED | 单测 + 冒烟 | 便携假车机，联调与回归用 |
 | 原生 CarPlay 采集对照（`tools/carplay-native`、`carprobe`） | INFERRED | 本地工具 | 用于对照分析，不作为协议真相 |
 
@@ -44,4 +44,5 @@
 
 - 第三方 App 无法静音通话流 → 通话走 HFP 优先。
 - 车机只在**配对那一刻**读一次 SDP，之后吃缓存 → 换机/改版本要按 README 顺序重配对。
+- ⚠️ **旧配对记录带 SDP 缓存**：手机侧删配对、车机侧不删，车机仍把本机当「普通手机」且不会重读 SDP。重新配对必须**先删车机那侧的记录**（车机列表里看不到本机才算删成）。手机侧 SDP 内容已用第三方探针（macOS IOBluetooth 按 UUID 定向查）实测正确——`2d8d2466`/`deca-fade`/`cade-defa`/`02030302` 全部 FOUND。
 - 同时存在两个 CarLife 客户端会让 Car+ 接受连接但不派发协议帧 → `HuClient` 进程级单例互斥。

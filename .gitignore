@@ -45,3 +45,4 @@ module/.stage/
 build/*.zip
 !tools/fake-adbd.py
 !tools/adb-tests/
+!docs/AUDIT-2026-11-27.md

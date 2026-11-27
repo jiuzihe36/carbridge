@@ -31,7 +31,7 @@
 ```bash
 export ANDROID_SDK_ROOT=$HOME/android-sdk
 ./android/build.sh
-# 产物：android/build/carbridge-0.1.0.apk
+# 产物：android/build/carbridge-<versionName>.apk（版本号见 app/AndroidManifest.xml）
 ```
 
 联调用的假车机：

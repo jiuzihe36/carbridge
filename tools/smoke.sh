@@ -50,13 +50,21 @@ log "手机=$PHONE  平板=$TABLET"
 
 # ---------------------------------------------------------------- 3. 装机
 log "安装 APK"
+# ⚠️ APK 名带版本号，不能写死（曾经写死 0.1.0，版本一升冒烟就装不上还以为是协议坏了）。
+#    版本号从各工程 Manifest 现读，产物名 = 构建脚本的输出名。
+CARBRIDGE_VER=$(grep -o 'android:versionName="[^"]*"' "$ROOT/android/app/AndroidManifest.xml" | head -1 | sed 's/.*="//; s/"$//')
+FAKECAR_VER=$(grep -o 'android:versionName="[^"]*"' "$ROOT/tools/fakecar/app/AndroidManifest.xml" | head -1 | sed 's/.*="//; s/"$//')
+CARBRIDGE_APK="$ROOT/android/build/carbridge-$CARBRIDGE_VER.apk"
+FAKECAR_APK="$ROOT/tools/fakecar/build/fakecar-$FAKECAR_VER.apk"
+[ -f "$CARBRIDGE_APK" ] || fail "找不到 $CARBRIDGE_APK（先构建）"
+[ -f "$FAKECAR_APK" ] || fail "找不到 $FAKECAR_APK（先构建）"
 if [ "${SKIP_INSTALL:-0}" = "1" ]; then
     log "跳过安装（SKIP_INSTALL=1）"
 else
     # -g 直接给权限；-r 覆盖安装。部分机型还会弹确认框，所以超时给足。
-    "$ADB" -s "$PHONE" install -r -g --user 0 "$ROOT/android/build/carbridge-0.1.0.apk" >/tmp/smoke-install.log 2>&1 \
+    "$ADB" -s "$PHONE" install -r -g --user 0 "$CARBRIDGE_APK" >/tmp/smoke-install.log 2>&1 \
         || { tail -5 /tmp/smoke-install.log; fail "手机安装失败（若是系统确认框，请手动点允许后重试）"; }
-    "$ADB" -s "$TABLET" install -r -g --user 0 "$ROOT/tools/fakecar/build/fakecar-0.1.0.apk" >/tmp/smoke-install2.log 2>&1 \
+    "$ADB" -s "$TABLET" install -r -g --user 0 "$FAKECAR_APK" >/tmp/smoke-install2.log 2>&1 \
         || { tail -5 /tmp/smoke-install2.log; fail "平板安装失败"; }
 fi
 
