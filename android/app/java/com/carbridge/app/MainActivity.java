@@ -71,7 +71,9 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
     private String lastStateLabel;
     private final StringBuilder sessionTimeline = new StringBuilder();
     // ---- 自动重连 ----
-    private boolean userWantsConnected;
+    /** 配对扫描进行中（防连点并发扫描）。 */
+    private volatile boolean pairScanning;
+    private boolean userWantsConnected = true;   // 冷启动默认「想连」：3 秒自动连接靠它放行；手动断开置 false
     /** Activity 已销毁：所有延迟任务/异步回调都要据此放手（否则会重建会话、弹窗崩）。 */
     private volatile boolean destroyed;
     /** 启动 3 秒后的自动连接（手动断开时要能取消）。 */
@@ -92,7 +94,9 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
     private View logBody;
     /** 「后台保活」卡片：状态文案 + 三个动作。 */
     private HuClient client;
-    private CarPlayBridge carPlay;    private CarPlayWirelessTx carPlayTx;
+    /** 跨线程：CarPlayBridge 收发线程会读 carPlay/carPlayTx（触摸/按键/端点回调），主线程写 → volatile。 */
+    private volatile CarPlayBridge carPlay;
+    private volatile CarPlayWirelessTx carPlayTx;
     private TextView btnCarPlay;
     private boolean logOpen;
     private String phoneInfo = "";
@@ -144,7 +148,8 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
     /** 指标：由视频线程写、主线程读 → volatile（否则读到的是旧值）。 */
     private volatile int fpsFrames;
     private volatile long fpsWindowStart;
-    private float fpsValue;
+    /** 由视频线程写、主线程读（updateMetrics）→ 必须 volatile（同组其它字段都标了）。 */
+    private volatile float fpsValue;
     private volatile long totalBytes;
     private volatile long firstFrameDelayMs;
     /** 当前存活的 Activity 实例（防止系统恢复任务时出现两套 CarPlay/iAP2 发送端）。 */
@@ -161,7 +166,7 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
             prev.finish();
         }
         // 自保护：签名钉死 / 反调试 / 反 hook。命中即 halt，所以放在最前面。
-        installCrashProbe();
+        installCrashHandlersOnce(getApplicationContext());
         com.carbridge.app.HuClient.verboseTrace =
                 getSharedPreferences(PREF_NAME, MODE_PRIVATE).getBoolean(KEY_VERBOSE_TRACE, false);
         // 上次被系统杀掉时可能没恢复本机铃声（车机模式会把 ring 音量压到 0）→ 先补回来
@@ -242,7 +247,7 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                 @Override public void onClick(View v) { showCarSideDialog(); }
             });
         }
-        installCrashLogger();
+        // 崩溃处理器在 onCreate 最前面已装过（每进程一次），这里不再重复链
         // 首次启动自动打开 3 步向导（只弹一次）
         try {
             android.content.SharedPreferences gp = getSharedPreferences("guide", MODE_PRIVATE);
@@ -724,6 +729,9 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
     }
     private void toggleConnect() {
         if (destroyed || isFinishing()) return;
+        // 权限被拒后用户再点「连接」：这里补一次请求（已授权时是空操作）——
+        // 以前只在 onCreate 请求，提示「再点一次连接并允许」实际永远弹不出窗。
+        requestRuntimePermissions();
         if (client != null && client.isRunning()) {
             userWantsConnected = false;    // 手动断开：取消自动重连
             retryStep = 0;
@@ -734,6 +742,18 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
             reconnectRunnable = null;
             client.stop();
             client = null;
+            // ⚠️ 断开是「两条会话都断」：以前只停 CarLife，CarPlay 推流还在跑，
+            //    保活却被拆了 → 锁屏即被冻结，车机端黑屏，三处状态互相矛盾。
+            CarPlayWirelessTx tx = carPlayTx;
+            if (tx != null) {
+                tx.stop();
+                carPlayTx = null;
+                resetCarPlaySteps();
+                if (btnCarPlay != null) btnCarPlay.setText(R.string.btn_carplay_start);
+            }
+            if (carPlay != null) {
+                carPlay.disconnect();
+            }
             autoCarplayArmed = false;      // 断开后不再自动拉推流
             setConnectButton(false);
             setStateDot(C_IDLE);
@@ -915,7 +935,9 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
     /** 会话日志缓冲（内存环形 + 落盘），实现搬到了 {@link SessionLog}。 */
     private SessionLog sessionLog;
 
-    private SessionLog sessionLog() {
+    /** ⚠️ synchronized：log() 会被主线程/视频线程/桥线程/崩溃钩子并发首调，
+     *  无锁懒加载可能建出两个 SessionLog，各自开同一个文件的 fd，其中一个永不关闭。 */
+    private synchronized SessionLog sessionLog() {
         if (sessionLog == null) sessionLog = new SessionLog(this);
         return sessionLog;
     }
@@ -1180,19 +1202,43 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
      *
      * <p>以前线程里抛异常 = App 直接消失，现场只有一句「闪退」，日志里什么都没有。
      */
-    private void installCrashLogger() {
+    /** 崩溃处理器只装一次（每进程）。⚠️ 不能持有 Activity：以前每次 onCreate 都链一层
+     *  匿名内类，进程被前台服务长期保活 → 每开关一次 App 就泄漏整个 Activity + View 树。 */
+    private static volatile boolean crashHandlerInstalled;
+
+    /**
+     * 安装全局崩溃处理器：把「未捕获异常 + 完整栈」追加进会话日志，再交给上一个处理器。
+     *
+     * <p>只依赖 Application Context 与文件路径，不引用任何 Activity 实例。
+     */
+    private static void installCrashHandlersOnce(final Context app) {
+        if (crashHandlerInstalled) return;
+        crashHandlerInstalled = true;
         final Thread.UncaughtExceptionHandler prev = Thread.getDefaultUncaughtExceptionHandler();
         Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
             @Override
             public void uncaughtException(Thread t, Throwable e) {
                 try {
-                    java.io.StringWriter sw = new java.io.StringWriter();
-                    e.printStackTrace(new java.io.PrintWriter(sw));
-                    log("✗ 未捕获异常 [" + t.getName() + "] " + e + "\n" + sw);
+                    File dir = app.getExternalFilesDir(null);
+                    if (dir != null) {
+                        File f = new File(dir, "carbridge-session.log");
+                        FileOutputStream o = new FileOutputStream(f, true);
+                        o.write(("!!!! 未捕获异常，进程即将终止 thread=" + t.getName()
+                                + " !!!!\n").getBytes("UTF-8"));
+                        java.io.StringWriter sw = new java.io.StringWriter();
+                        e.printStackTrace(new java.io.PrintWriter(sw));
+                        o.write(sw.toString().getBytes("UTF-8"));
+                        o.write("\n".getBytes("UTF-8"));
+                        o.flush();
+                        o.close();
+                    }
                 } catch (Throwable tDiag) {
+                    // 连崩溃日志都写不了就认了，绝不能二次抛
                     com.carbridge.carplay.util.Diag.w("MainActivity", tDiag);
                 }
-                if (prev != null) prev.uncaughtException(t, e);
+                if (prev != null) {
+                    prev.uncaughtException(t, e);
+                }
             }
         });
     }
@@ -1382,7 +1428,13 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
             log("✗ 重新配对中止：SDP 信标没在跑（先确认蓝牙已开、权限已给）");
             return;
         }
-        final android.bluetooth.BluetoothDevice car = CarPairing.findCar();
+        final android.bluetooth.BluetoothDevice car;
+        try {
+            car = CarPairing.findCar();
+        } catch (SecurityException e) {
+            Toast.makeText(this, "缺少「附近的设备」权限：请到系统设置授予本应用后重试", Toast.LENGTH_LONG).show();
+            return;
+        }
         if (car == null) {
             // 已经清过配对、只是还没和车机重配上 —— 这一步不该是死路：
             // 直接把「让车机发现本机」的窗口打开（蓝牙设置页 = 可被发现）
@@ -1471,7 +1523,16 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
      */
     private void showPairScanDialog() {
         android.bluetooth.BluetoothAdapter adapter = com.carbridge.carplay.bt.Bt.adapter(this);
-        if (adapter == null || !adapter.isEnabled()) {
+        // ⚠️ Android 12+ 无 BLUETOOTH_CONNECT 时 isEnabled() 会抛 SecurityException，
+        //    以前这里直接崩 —— 恰好是本 App 引导用户「去授权」的那个状态。
+        boolean enabled;
+        try {
+            enabled = adapter != null && adapter.isEnabled();
+        } catch (SecurityException e) {
+            Toast.makeText(this, "缺少「附近的设备」权限：请到系统设置授予本应用后重试", Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (!enabled) {
             Toast.makeText(this, "蓝牙没开", Toast.LENGTH_LONG).show();
             return;
         }
@@ -1488,6 +1549,13 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
 
     /** 后台扫 12 秒，收设备，再把结果丢回主线程让用户点。 */
     private void startPairScan(final android.bluetooth.BluetoothAdapter adapter) {
+        // ⚠️ 重入保护：连点会并发多条 Bg 扫描，startDiscovery/cancelDiscovery 互相打断，
+        //    12s 后弹出多个选择框，选中的列表还可能来自被打断的扫描。
+        if (pairScanning) {
+            Toast.makeText(this, "扫描进行中，稍等一下", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        pairScanning = true;
         com.carbridge.carplay.util.Bg.run("pair-scan", new Runnable() {
             @Override
             public void run() {
@@ -1514,9 +1582,17 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                         android.bluetooth.BluetoothDevice.ACTION_FOUND);
                 try {
                     // 系统广播（蓝牙栈发的）必须 EXPORTED，否则一条都收不到
-                    registerReceiver(receiver, f, Context.RECEIVER_EXPORTED);
+                    // ⚠️ 三参重载是 API 33 才有的；minSdk 26 上直接调会 NoSuchMethodError
+                    //    （被 catch 吞成一行「注册扫描监听失败」，扫描恒空）。同文件
+                    //    bond watcher（2209+）就是版本分支写法，这里对齐。
+                    if (Build.VERSION.SDK_INT >= 33) {
+                        registerReceiver(receiver, f, Context.RECEIVER_EXPORTED);
+                    } else {
+                        registerReceiver(receiver, f);
+                    }
                 } catch (Throwable t) {
                     log("✗ 注册扫描监听失败：" + t);
+                    pairScanning = false;
                     return;
                 }
                 try {
@@ -1547,6 +1623,7 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
+                        pairScanning = false;   // 结果回到主线程才放行下一次扫描
                         showPairScanResult(result);
                     }
                 });
@@ -1778,31 +1855,6 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         /**
      * 崩溃取证：把任何线程的未捕获异常栈直接写进会话日志。
      */
-    private void installCrashProbe() {
-        final Thread.UncaughtExceptionHandler prev = Thread.getDefaultUncaughtExceptionHandler();
-        Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
-            @Override
-            public void uncaughtException(Thread t, Throwable e) {
-                try {
-                    File f = logFile();
-                    FileOutputStream o = new FileOutputStream(f, true);
-                    o.write(("!!!! 未捕获异常，进程即将终止 thread=" + t.getName()
-                            + " !!!!\n").getBytes("UTF-8"));
-                    java.io.StringWriter sw = new java.io.StringWriter();
-                    e.printStackTrace(new java.io.PrintWriter(sw));
-                    o.write(sw.toString().getBytes("UTF-8"));
-                    o.write("\n".getBytes("UTF-8"));
-                    o.flush();
-                    o.close();
-                } catch (Throwable tDiag) { com.carbridge.carplay.util.Diag.w("MainActivity", tDiag);
-                    // 连崩溃日志都写不了就认了，绝不能二次抛
-                }
-                if (prev != null) {
-                    prev.uncaughtException(t, e);
-                }
-            }
-        });
-    }
     private File logFile() {
         return sessionLog().file();
     }
@@ -1861,9 +1913,8 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
             }
         } catch (Throwable tDiag) { com.carbridge.carplay.util.Diag.w("MainActivity", tDiag);
         }
-        synchronized (logLines) {
-            return join(logLines);
-        }
+        // 文件不可写/被清空时的兜底：内存日志在 SessionLog 里（logLines 自迁移后已死）
+        return sessionLog().all();
     }
     private static String join(List<String> lines) {
         StringBuilder sb = new StringBuilder();
@@ -2391,7 +2442,9 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         }
 
         // ④ 前台服务是否在跑（进程被杀后能不能自己爬回来）
-        boolean beaconRunning = com.carbridge.carplay.bt.CarPlaySdpBeacon.isStarted();
+        // ⚠️ 状态源必须是 SdpBeaconService.isAlive()（服务存活）；isStarted() 只是
+        //    「SDP 记录已注册」（onDestroy 保留记录但服务已死），拿它当服务状态会假阳性。
+        boolean beaconRunning = SdpBeaconService.isAlive();
         log(beaconRunning ? "✓ 信标前台服务：在跑" : "✗ 信标前台服务：没跑");
 
         // ⑤ 精确闹钟权限（看门狗在 Doze/省电下准时醒的关键，Android 12+ 默认拒绝）
@@ -2475,7 +2528,11 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                 main.postDelayed(new Runnable() {
                     @Override
                     public void run() {
-                        runBtDiag();
+                        try {
+                            runBtDiag();
+                        } finally {
+                            diagRunning = false;   // 放过这一轮：进程内后续 am start 诊断不被静默吞掉
+                        }
                     }
                 }, 1500);
             } else if ("eir".equals(diag)) {
@@ -2483,12 +2540,16 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                 main.postDelayed(new Runnable() {
                     @Override
                     public void run() {
-                        BtDiag.scanEirOnly(appCtx, new BtDiag.Log() {
-                            @Override
-                            public void onLog(String line) {
-                                log(line);
-                            }
-                        });
+                        try {
+                            BtDiag.scanEirOnly(appCtx, new BtDiag.Log() {
+                                @Override
+                                public void onLog(String line) {
+                                    log(line);
+                                }
+                            });
+                        } finally {
+                            diagRunning = false;   // 同 uuid 分支：不被永闩吞掉后续诊断
+                        }
                     }
                 }, 1500);
             }
@@ -2964,8 +3025,21 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         carplayManualStop = false;
         resetCarPlaySteps();
         carPlayTx = new CarPlayWirelessTx(this, new CarPlayWirelessTx.Listener() {
-            @Override public void onState(CarPlayWirelessTx.State s) {
+            @Override public void onState(final CarPlayWirelessTx.State s) {
                 log("CarPlay 状态: " + s);
+                // ⚠️ 按钮必须跟随 tx 状态机：tx 会自主转 ERROR（会话失败），
+                //    以前按钮只在用户点击时改文案 → 失败后仍显示「停止配对/鉴权」，
+                //    点它实际执行「重新启动」，语义完全反转。
+                if (s == CarPlayWirelessTx.State.IDLE || s == CarPlayWirelessTx.State.ERROR) {
+                    main.post(new Runnable() {
+                        @Override public void run() {
+                            if (destroyed) return;
+                            if (btnCarPlay != null) {
+                                btnCarPlay.setText(R.string.btn_carplay_start);
+                            }
+                        }
+                    });
+                }
             }
             @Override public void onLog(String line) { log(line); }
             @Override public void onStep(final CarPlayWirelessTx.Step s) {
@@ -2987,6 +3061,7 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                 });
             }
             @Override public void onCarPlayEndpoint(String host, int port) {
+                if (destroyed) return;   // 回调来自 tx 线程；已销毁实例不能再建会话
                 rememberCarProfile(host);
                 // 拿到车机 AirPlay 端点 → 让 CarPlayBridge 建会话并开始推流
                 CarPlayBridge b = carPlay;
@@ -3017,6 +3092,14 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         // 用户从桌面点开 App 的这一刻，最需要的是「车机随时能认出本机」。
         // 服务被杀 / 蓝牙重开的空档都靠这一下补齐（幂等，健康时不做事）。
         keepBeaconAlive("打开 App");
+        // 服务被杀/被系统回收的空档：这里把两个前台服务补齐（幂等）。
+        // 以前只补 SDP 记录 —— 服务死了但记录还在，自检和看门狗全都在骗自己。
+        if (!SdpBeaconService.isAlive()) {
+            SdpBeaconService.start(this);
+        }
+        if (client != null || carPlayTx != null) {
+            KeepAliveService.start(this);
+        }
         refreshIdentity();
         kickIdentityProbe();
         // 从系统设置补完蓝牙权限再回来时，配对监听可能还没注册（它原来只在
@@ -3050,6 +3133,9 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
             carPlayTx.stop();
             carPlayTx = null;
         }
+        // 会话都拆完了：保活（前台服务 + 三把锁 + 常驻通知）没有服务对象了，必须停。
+        // SDP 信标是 SdpBeaconService 的事，不受影响（车机识别靠它，不能停）。
+        KeepAliveService.stop(this);
         if (bondReceiver != null) {
             try {
                 unregisterReceiver(bondReceiver);
