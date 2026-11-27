@@ -712,6 +712,25 @@ public final class SelfTests {
         bad[0] ^= 0x01;
         check(!com.carbridge.carplay.pairing.Ed25519.verify(bad, pk1, msg1), "篡改签名必须验签失败");
 
+        // 小阶点公钥伪造必须被拒（第 6 批修复钉死）：
+        // A = identity（01‖00×31），R = 基点编码（y=4/5 mod P），s = 1 ——
+        // cofactorless 方程下这套伪造在旧实现里会误判通过。
+        byte[] aId = new byte[32];
+        aId[0] = 0x01;
+        java.math.BigInteger p = java.math.BigInteger.ONE.shiftLeft(255)
+                .subtract(java.math.BigInteger.valueOf(19));
+        java.math.BigInteger baseY = java.math.BigInteger.valueOf(4)
+                .multiply(java.math.BigInteger.valueOf(5).modInverse(p)).mod(p);
+        byte[] rb = new byte[32];
+        for (int i = 0; i < 32; i++) {
+            rb[i] = (byte) (baseY.shiftRight(i * 8).intValue() & 0xFF);
+        }
+        byte[] forge = new byte[64];
+        System.arraycopy(rb, 0, forge, 0, 32);
+        forge[32] = 0x01;   // s = 1（小端）
+        check(!com.carbridge.carplay.pairing.Ed25519.verify(forge, aId, "x".getBytes()),
+                "小阶点公钥伪造必须被拒（A=identity, s=1, R=[1]B）");
+
         // RFC 7748 §6.1：X25519 两个密钥交换必须得到同一共享密钥
         byte[] aliceSk = hex("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a");
         byte[] bobSk   = hex("5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb");

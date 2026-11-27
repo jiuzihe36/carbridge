@@ -42,6 +42,10 @@ public final class Ed25519 {
             Point r = Point.decode(java.util.Arrays.copyOfRange(signature, 0, 32));
             Point a = Point.decode(publicKey);
             if (r == null || a == null) return false;
+            // ⚠️ 小阶点拒绝：cofactorless 方程下 identity 公钥可伪造任意签名
+            //    （A=identity、s=1、R=[1]·B 就通过验签方程，已实证）。
+            //    libsodium 思路：[8]·P == O 即小阶，覆盖全部 8 个点，不靠黑名单。
+            if (isSmallOrder(r) || isSmallOrder(a)) return false;
             BigInteger s = le255(signature, 32);
             if (s.compareTo(L) >= 0) return false;      // s 必须 < L
 
@@ -54,6 +58,12 @@ public final class Ed25519 {
         } catch (RuntimeException e) {
             return false;
         }
+    }
+
+    /** 小阶点判定：[8]·P == O（覆盖全部 8 个小阶点，含 identity）。 */
+    private static boolean isSmallOrder(Point p) {
+        return p.scalarMult(BigInteger.valueOf(8))
+                .equals(new Point(BigInteger.ZERO, BigInteger.ONE, BigInteger.ONE, BigInteger.ZERO));
     }
 
     /** 生成密钥对。 */
