@@ -67,6 +67,10 @@ public final class SRP6a {
 
     /** 接收服务端公钥 B 与 salt（必须在 {@link #publicA()} 之前调用）。 */
     public void processServerParams(BigInteger b, byte[] salt) {
+        // RFC 5054 §2.5.3 客户端必检：B % N == 0 必须中止（防御恶意/异常服务端）
+        if (b != null && b.mod(N).signum() == 0) {
+            throw new IllegalArgumentException("SRP 服务端公钥 B % N == 0（RFC 5054 要求中止）");
+        }
         this.bigB = b;
         this.saltBytes = salt;
     }

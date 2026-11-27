@@ -89,6 +89,18 @@ else
     fi
 fi
 
+if [ ! -x tools/adb-tests/run.sh ]; then
+    record FAIL "adb 协议测试" "tools/adb-tests/run.sh 缺失或不可执行"
+else
+    log="/tmp/verify-adb.log"
+    if tools/adb-tests/run.sh >"$log" 2>&1; then
+        record PASS "adb 协议测试" "串台场景 5/5"
+    else
+        record FAIL "adb 协议测试" "见 $log"
+        tail -n 15 "$log" | sed 's/^/        /'
+    fi
+fi
+
 # ---- 3. 构建（可选：BUILD=1） -------------------------------------------------
 printf '\n[5/6] 构建\n'
 if [ "${BUILD:-0}" != "1" ]; then

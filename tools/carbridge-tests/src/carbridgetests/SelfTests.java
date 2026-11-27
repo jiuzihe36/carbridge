@@ -47,6 +47,7 @@ public final class SelfTests {
         hidKeys();
         linkEngine();
         aeadAndBplist();
+        controlCipher();
 
         System.out.println();
         System.out.println("通过 " + passed + " / 失败 " + failed);
@@ -1093,6 +1094,65 @@ public final class SelfTests {
             threw = true;
         }
         check(threw, "截断 bplist → 抛异常");
+    }
+
+    // ---------------------------------------------------------------- ControlCipher 帧级韧性
+
+    /**
+     * 第 6 批：单帧 AEAD 失败不再楔死通道（丢帧续解），连续 4 帧失败才判死；
+     * 缓冲超 256KB 判错位。
+     */
+    private static void controlCipher() throws Exception {
+        section("ControlCipher 帧级韧性");
+
+        byte[] shared = new byte[32];
+        for (int i = 0; i < 32; i++) shared[i] = (byte) (i * 3 + 5);
+        com.carbridge.carplay.pairing.ControlCipher enc =
+                new com.carbridge.carplay.pairing.ControlCipher(shared, true, true);
+        com.carbridge.carplay.pairing.ControlCipher dec =
+                new com.carbridge.carplay.pairing.ControlCipher(shared, true, false);
+
+        // 1) 三帧正常往返
+        byte[] f1 = enc.encrypt("帧一".getBytes("UTF-8"));
+        byte[] f2 = enc.encrypt("帧二".getBytes("UTF-8"));
+        byte[] f3 = enc.encrypt("帧三".getBytes("UTF-8"));
+        byte[] all = new byte[f1.length + f2.length + f3.length];
+        System.arraycopy(f1, 0, all, 0, f1.length);
+        System.arraycopy(f2, 0, all, f1.length, f2.length);
+        System.arraycopy(f3, 0, all, f1.length + f2.length, f3.length);
+        String got = new String(dec.decrypt(all), "UTF-8");
+        check("帧一帧二帧三".equals(got), "三帧顺序解密一致");
+
+        // 2) 中间帧损坏：丢它但后续帧还能解（旧实现从此永久楔死）
+        com.carbridge.carplay.pairing.ControlCipher enc2 =
+                new com.carbridge.carplay.pairing.ControlCipher(shared, true, true);
+        com.carbridge.carplay.pairing.ControlCipher dec2 =
+                new com.carbridge.carplay.pairing.ControlCipher(shared, true, false);
+        byte[] g1 = enc2.encrypt("好帧A".getBytes("UTF-8"));
+        byte[] gBad = enc2.encrypt("坏帧".getBytes("UTF-8"));
+        byte[] g3 = enc2.encrypt("好帧B".getBytes("UTF-8"));
+        gBad[gBad.length - 2] ^= 0x01;   // 翻一个比特 → tag 必坏
+        byte[] seq = new byte[g1.length + gBad.length + g3.length];
+        System.arraycopy(g1, 0, seq, 0, g1.length);
+        System.arraycopy(gBad, 0, seq, g1.length, gBad.length);
+        System.arraycopy(g3, 0, seq, g1.length + gBad.length, g3.length);
+        String got2 = new String(dec2.decrypt(seq), "UTF-8");
+        check("好帧A好帧B".equals(got2), "中间坏帧被跳过，后续帧照常解密（不再楔死）");
+
+        // 3) 连续 4 帧全坏 → 判通道不可恢复（抛异常）
+        com.carbridge.carplay.pairing.ControlCipher enc3 =
+                new com.carbridge.carplay.pairing.ControlCipher(shared, true, true);
+        com.carbridge.carplay.pairing.ControlCipher dec3 =
+                new com.carbridge.carplay.pairing.ControlCipher(shared, true, false);
+        byte[] bad = enc3.encrypt("x".getBytes("UTF-8"));
+        bad[bad.length - 1] ^= 0x01;
+        boolean threw = false;
+        try {
+            for (int i = 0; i < 4; i++) dec3.decrypt(bad);
+        } catch (java.security.GeneralSecurityException e) {
+            threw = true;
+        }
+        check(threw, "连续 4 帧 AEAD 失败 → 判通道死亡（触发上层重连）");
     }
 
     private static void section(String name) {

@@ -44,3 +44,4 @@ android/app/assets/adbkey.pub
 module/.stage/
 build/*.zip
 !tools/fake-adbd.py
+!tools/adb-tests/

@@ -27,7 +27,11 @@ public final class ControlCipher {
     private final SecretKeySpec key;
     private final boolean encrypting;
     private long counter;
+    /** 连续 AEAD 校验失败帧数：偶发损坏跳过自愈，连续失败判通道死亡。 */
+    private int consecutiveFailures;
     private final ByteArrayOutputStream pending = new ByteArrayOutputStream();
+    /** 半帧缓冲上限：对端持续发对不上长度的字节时，缓冲只增不减会顶到 OOM。 */
+    private static final int MAX_PENDING = 256 * 1024;
 
     /**
      * @param sharedSecret pair-verify 的共享秘密
@@ -88,6 +92,12 @@ public final class ControlCipher {
         if (encrypting) throw new IllegalStateException("这是发送方向的 cipher");
         if (framed == null || framed.length == 0) return new byte[0];
         pending.write(framed, 0, framed.length);
+        if (pending.size() > MAX_PENDING) {
+            // 流已错位（对端一直在发长度对不上的字节）：缓冲无上限增长会 OOM，
+            // 判通道不可恢复，让上层重建会话。
+            pending.reset();
+            throw new GeneralSecurityException("解密缓冲超过 256KB，流已错位");
+        }
         byte[] buf = pending.toByteArray();
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         int off = 0;
@@ -99,9 +109,23 @@ public final class ControlCipher {
             System.arraycopy(buf, off, aad, 0, HEADER_SIZE);
             byte[] sealed = new byte[len + TAG_SIZE];
             System.arraycopy(buf, off + HEADER_SIZE, sealed, 0, sealed.length);
-            byte[] plain = open(sealed, aad);
-            out.write(plain, 0, plain.length);
-            counter++;
+            try {
+                byte[] plain = open(sealed, aad);
+                out.write(plain, 0, plain.length);
+                consecutiveFailures = 0;
+            } catch (GeneralSecurityException e) {
+                // ⚠️ 失败帧也必须**消费计数并跳过**：旧实现在这里直接抛，
+                //    pending 不清、counter 不前进 —— 同一帧用同一计数重解必然再失败，
+                //    单帧损坏就把整条控制/事件通道永久楔死。
+                consecutiveFailures++;
+                if (consecutiveFailures >= 4) {
+                    pending.reset();
+                    throw new GeneralSecurityException("连续 " + consecutiveFailures
+                            + " 帧 AEAD 校验失败，通道不可恢复: " + e);
+                }
+                // 偶发损坏：丢这一帧的明文，继续解后续帧（通道活下来）
+            }
+            counter++;   // 成败都消费：对端按帧递增，我们也必须按帧递增
             off = frameEnd;
         }
         pending.reset();
