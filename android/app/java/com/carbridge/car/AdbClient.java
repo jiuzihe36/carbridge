@@ -135,6 +135,14 @@ final class AdbClient {
             } catch (SocketTimeoutException e) {
                 throw new IOException("等待车机 shell 输出超时", e);
             }
+            // ⚠️ 必须按流 id 过滤：arg1 是被回显的我们的 local id。老 adbd（Android 9）
+            //    会把已关闭流的迟到 WRTE/CLSE 混进下一条流 —— 实车上 getprop 的读数
+            //    整行错位到下一条命令（setprop 的读回拿到的是 setprop 自己的输出），
+            //    「写入成功」被判成失败。不看 id 就收 = 跨流串台。
+            if (p.arg1 != localId) {
+                Diag.count("AdbClient.strayPacket");
+                continue;
+            }
             if (p.command == A_OKAY) {
                 // READY(local-id, remote-id) 两个 id 都相对**发送方**：adbd 发的
                 // OKAY 里 arg0 才是它自己的流 id，arg1 是被回显的我们的 id。
@@ -181,6 +189,10 @@ final class AdbClient {
         int remoteId = -1;
         while (true) {
             Packet p = readPacket();
+            if (p.arg1 != localId) {   // 同 shell()：老 adbd 的迟到包不许进本流
+                Diag.count("AdbClient.strayPacket");
+                continue;
+            }
             if (p.command == A_OKAY) {
                 if (remoteId < 0) remoteId = p.arg0;
                 break;
@@ -210,6 +222,10 @@ final class AdbClient {
             // 每发一块等一次 OKAY；中途若有输出先收着
             while (true) {
                 Packet p = readPacket();
+                if (p.arg1 != localId) {   // 迟到/它流的包丢弃
+                    Diag.count("AdbClient.strayPacket");
+                    continue;
+                }
                 if (p.command == A_OKAY) break;
                 if (p.command == A_WRTE) {
                     output.write(p.data);
@@ -232,6 +248,10 @@ final class AdbClient {
         long deadline = System.currentTimeMillis() + 60000L;
         while (System.currentTimeMillis() < deadline) {
             Packet p = readPacket();
+            if (p.arg1 != localId) {   // 迟到/它流的包丢弃
+                Diag.count("AdbClient.strayPacket");
+                continue;
+            }
             if (p.command == A_WRTE) {
                 output.write(p.data);
                 send(A_OKAY, localId, remoteId, new byte[0]);

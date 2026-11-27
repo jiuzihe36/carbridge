@@ -43,3 +43,4 @@ android/app/assets/adbkey.pub
 # 模块构建产物
 module/.stage/
 build/*.zip
+!tools/fake-adbd.py
