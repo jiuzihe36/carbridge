@@ -129,6 +129,8 @@ public final class CarPlayWirelessTx {
      *  用它守护所有"延迟入网 / 重复凭据 / 重复入网回调"，避免把已经建立的会话降级。
      *  ⚠️ 写方是网络/会话回调线程，读方是主线程看门狗 —— 必须 volatile。 */
     private volatile boolean airplaySessionActive;
+    /** 拿到 AirPlay 端点（0x4301/mDNS）的时刻：端点后很快失败要归因到 Wi-Fi 而非握手。 */
+    private volatile long endpointAtMs;
     /** mDNS 发现用的本地网段前缀（重连时复用）。 */
     private String airplayPrefix;
     /** 通话音频是否已经路由到车机（避免重复连 HFP）。 */
@@ -1020,6 +1022,12 @@ public final class CarPlayWirelessTx {
         // 标志位与 state 不一致时（理论上不该发生）仍按旧逻辑只处理 AIRPLAY 态
         if (!wasActive && state != State.AIRPLAY) return;
         if (state == State.IDLE) return;   // 用户已经手动停了，别自己爬起来
+        // 端点后多久失败的：30s 内失败多半是「车机 Wi-Fi 没真正连上 / 端口不对 」，
+        // 而不是 AirPlay 握手本身失败 —— 日志里要能区分，否则排障永远在盲猜。
+        long since = endpointAtMs > 0 ? (System.currentTimeMillis() - endpointAtMs) / 1000 : -1;
+        if (since >= 0 && since < 30) {
+            log("⚠ 端点后 " + since + "s 就失败：多半是 Wi-Fi 没入网/端口不对（不是 AirPlay 握手问题）");
+        }
         log("AirPlay 会话结束（" + reason + "）→ 回到发现阶段重找端点");
         setState(State.DISCOVERING);
         enterStep(Step.AIRPLAY_SESSION);
@@ -1071,6 +1079,7 @@ public final class CarPlayWirelessTx {
         }
         main.removeCallbacks(mdnsWatchdog);
         airplaySessionActive = true;
+        endpointAtMs = System.currentTimeMillis();
         setState(State.AIRPLAY);
         enterStep(Step.AIRPLAY_SESSION);
         log("得到车机 AirPlay 端点 " + host + ":" + port);

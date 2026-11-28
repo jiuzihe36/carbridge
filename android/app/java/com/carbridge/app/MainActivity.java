@@ -830,6 +830,14 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
     private CarPlayBridge ensureBridge() {
         if (carPlay == null) {
             carPlay = new CarPlayBridge(this);
+            // 车机要关键帧 → 向上游 Car+ 催一个 IDR（0x1800B），别干等自然 GOP
+            final CarPlayBridge b = carPlay;
+            b.setKeyFrameRequester(new Runnable() {
+                @Override public void run() {
+                    HuClient c = client;
+                    if (c != null) c.requestKeyframe("车机 forceKeyFrame（解码器失步）");
+                }
+            });
             // 品牌开屏画面：Car+ 还没把画面送过来时，先显示 carbridge 的 logo + 名称，
             // 避免车机黑屏（仿车机开机主页）。
             try {

@@ -54,6 +54,15 @@ public final class AirPlaySession {
         default void onDisplaySize(int width, int height, int maxFps) {
             onDisplaySize(width, height);
         }
+
+        /**
+         * 车机要求关键帧（解码器失步/黑屏恢复）。
+         *
+         * <p>默认空实现：只有能向上游（CarLife/Car+）催 IDR 的实现才需要覆盖。
+         * 生产实现应把它接到 {@code HuClient.requestKeyframe()}。
+         */
+        default void onForceKeyFrame() {
+        }
     }
 
     public enum State { IDLE, CONNECTING, SETTING_UP, STREAMING, ERROR, CLOSED }
@@ -2055,6 +2064,12 @@ public final class AirPlaySession {
                             configDirty = true;
                             waitingForKeyFrame = true;
                             log("车机要求关键帧 → 等下一个 IDR（先补 OP_VIDEO_CONFIG）");
+                            // 同时向上游催一个 IDR：只等自然 GOP 的话，黑屏恢复时延不可控
+                            try {
+                                listener.onForceKeyFrame();
+                            } catch (Throwable tDiag) {
+                                Diag.w("AirPlaySession.onForceKeyFrame", tDiag);
+                            }
                         } else if ("requestUI".equals(type)) {
                             // requestUI = 车机请求显示投射界面。我们的资源归属恒为「归手机」，
                             // 按 changeModes 同款回应 modesChanged 重申（声明了 UI_CONTEXT 就要有实现）。

@@ -153,6 +153,8 @@ public final class Iap2SenderSession {
     private volatile int challengeToken;
     /** 0xAA00 → 0xAA01 的重发计数（看门狗用，每轮认证归零）。 */
     private int authCertRetries;
+    /** 挑战梯当前走到第几步（-1=未开始）；EC 证书会从 32B 起跑，所以不能直接用档位下标。 */
+    private int challengeStep = -1;
     /** 本端主动关闭中（close()→CLOSED）：链路被拆不能算「挑战档位被拒」。 */
     private volatile boolean closing;
     /** 认证完成前早到的 0x5703 凭据缓存（认证成功后按正常流程处理）。 */
@@ -425,6 +427,7 @@ public final class Iap2SenderSession {
         wifiConfigSeen = false;
         endpointSeen = false;
         challengeIndex = -1;
+        challengeStep = -1;
         challengeSent = false;
         challengeToken++;            // 作废上一轮还没跑完的挑战定时器
         setState(State.IDENTIFYING);
@@ -664,6 +667,7 @@ public final class Iap2SenderSession {
         setState(State.AUTHENTICATING);
         // 新一轮认证：挑战梯与在途标记全部归零（重复 0x1D01 重进这里时不能从上一档续跑）
         challengeIndex = -1;
+        challengeStep = -1;
         challengeSent = false;
         authCertRetries = 0;
         engine.sendCsm(Iap2Ids.AUTH_INFORMATION, new byte[0]);
@@ -787,9 +791,16 @@ public final class Iap2SenderSession {
      * 到达，非同步的「if (!challengeSent) → 发」会双发挑战，验签必失败。
      */
     private synchronized void sendNextChallenge() {
-        int idx = challengeIndex + 1;
-        while (idx < CHALLENGE_LENGTHS.length && REJECTED_CHALLENGE_LEVELS.contains(idx)) idx++;
-        if (idx >= CHALLENGE_LENGTHS.length) {
+        // EC 证书（AuthV3 裸签）只吃 32B 挑战：优先 32，再退 20/16。
+        // RSA 老车机走 20 起步的历史顺序不动（DiPlay 实测 20B 是它的可用档）。
+        // challengeStep = 梯子上的第几步；challengeIndex = 实际档位下标（超时/拒绝
+        // 判定仍按档位下标走，两者不能混用）。
+        int[] order = peerEcKey != null
+                ? new int[]{1, 0, 2}
+                : new int[]{0, 1, 2};
+        int step = challengeStep + 1;
+        while (step < order.length && REJECTED_CHALLENGE_LEVELS.contains(order[step])) step++;
+        if (step >= order.length) {
             log("MFi 挑战长度全部被拒，放弃认证");
             // ⚠️ 以前这里只是 return：状态永远停在 AUTHENTICATING，
             //    上层既看不到失败、也不会重试 → 界面像卡死。
@@ -798,6 +809,8 @@ public final class Iap2SenderSession {
             listener.onLog("MFi 认证失败：车机把我们所有长度的挑战都拒了（32/20/16B）");
             return;
         }
+        int idx = order[step];
+        challengeStep = step;
         challengeIndex = idx;
         byte[] challenge = new byte[CHALLENGE_LENGTHS[idx]];
         new java.security.SecureRandom().nextBytes(challenge);   // 真 iPhone 用随机挑战
@@ -1033,19 +1046,47 @@ public final class Iap2SenderSession {
         int port = 0;
         String deviceId = "";
 
-        // 布局 1：无线组（param1）→ 子参数 id 3 = IP 列表
+        // 布局 1：无线组（param1）→ 子参数：0=SSID、1=passphrase、2=channel、3=IP 列表、4=securityType
         Iap2Csm.Param wireless = Iap2Csm.find(params, 1);
+        String wSsid = null, wPass = null;
+        int wChannel = 0, wSecurity = 0;
         if (wireless != null) {
             for (Iap2Csm.Param sp : wireless.asNested()) {
-                if (sp.paramId == 3) {
-                    String ip = sp.asString();
-                    if (isIpv4(ip) && host == null) host = ip;
+                switch (sp.paramId) {
+                    case 0:
+                        wSsid = sp.asString();
+                        break;
+                    case 1:
+                        wPass = sp.asString();
+                        break;
+                    case 2:
+                        wChannel = (int) sp.asUInt();
+                        break;
+                    case 3: {
+                        String ip = sp.asString();
+                        if (isIpv4(ip) && host == null) host = ip;
+                        break;
+                    }
+                    case 4:
+                        wSecurity = (int) sp.asUInt();
+                        break;
+                    default:
+                        break;
                 }
             }
             Iap2Csm.Param pp = Iap2Csm.find(params, 2);
             if (pp != null) port = (int) pp.asUInt();
             Iap2Csm.Param dp = Iap2Csm.find(params, 3);
             if (dp != null) deviceId = dp.asString();
+        }
+        // ⚠️ 只答 0x4301、不答 0x5703 的车机：AP 凭据就在无线组里。
+        //    以前这里只取 IP，SSID/密码全丢 → WifiJoiner 见空 SSID 直接返回，
+        //    车机发完 0x4300 就再也走不下去（日志却显示已拿到端点）。
+        if (!wifiConfigSeen && wSsid != null && !wSsid.isEmpty()) {
+            log("0x4301 无线组带 AP 凭据（SSID=" + wSsid + " ch=" + wChannel
+                    + " sec=" + wSecurity + "）→ 交给入网");
+            listener.onWifiConfig(new WifiConfig(wSsid, wPass == null ? "" : wPass,
+                    wChannel, wSecurity));
         }
 
         // 布局 2：param0=IP、param1=端口、param2=设备ID（某些车机的扁平布局）

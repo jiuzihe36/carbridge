@@ -336,6 +336,19 @@ public final class SelfTests {
         check(MfiCrypto.parseEcPublicKey(spki384) == null,
                 "P-384 SPKI → parseEcPublicKey 返回 null（第 11 批修复）");
         check(MfiCrypto.parseEcPublicKey(spki) != null, "P-256 SPKI 正常解析（回归）");
+
+        // AuthV3 裸签：NONEwithECDSA 直接对 32B「挑战」签（不做二次哈希）
+        byte[] ch32 = new byte[32];
+        new java.util.Random(7).nextBytes(ch32);
+        java.security.Signature bare = java.security.Signature.getInstance("NONEwithECDSA");
+        bare.initSign(kp.getPrivate());
+        bare.update(ch32);
+        byte[] bareRaw = derSigToRaw(bare.sign());
+        check(bareRaw != null && MfiCrypto.verifyEcSignature(ch32, bareRaw, parsed),
+                "NONEwithECDSA 裸签（64B r||s）验签通过（第 16 批）");
+        check(MfiCrypto.verifyEcSignature(ch32, bareRaw, parsed) == false
+                || !MfiCrypto.verifyEcSignature(tampered, bareRaw, parsed),
+                "裸签挑战被改 → 验签失败");
     }
 
     /** 构造一份「SHA-1 DigestInfo + PKCS#1 填充」的 EM（供 e=1 伪造测试用）。 */

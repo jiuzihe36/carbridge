@@ -248,6 +248,10 @@ public final class HuClient {
      * <p>防止归一化过程被自己的超时逻辑打断。
      */
     private volatile boolean frameRateChanging;
+    /** 最近一次向上游要 IDR 的时刻与计数（限流：1 次/秒、每轮最多 3 次）。 */
+    private volatile long lastKeyFrameReqMs;
+    private int keyFrameReqs;
+    private int keyFrameReqSuppressed;
     /**
      * 运行中动态改帧率（车机 /info 在推流后才到）。
      *
@@ -397,6 +401,33 @@ public final class HuClient {
         fps = f;
         pushStreamSize();
         notifyEncoderInfo();
+    }
+
+    /**
+     * 向上游 Car+ 请求一个 IDR（解码器失步/首帧超时/跳 GOP 时用）。
+     *
+     * <p>CarLife 没有独立的关键帧请求消息：mcarplay 实测 0x1800B 是 VIDEO_ENCODER_RESET
+     * （车机在解码器失步时用它让手机立刻吐 IDR），CarWithin 则重发 0x18009 作低成本试探。
+     * 限流：1 次/秒、每轮最多 3 次 —— 对端不支持时只是忽略一条空命令，不会破坏现有流。
+     */
+    public void requestKeyframe(String why) {
+        if (!running) return;
+        if (socks.get(0) == null) return;
+        long now = System.currentTimeMillis();
+        if (now - lastKeyFrameReqMs < 1000L) {
+            keyFrameReqSuppressed++;
+            return;
+        }
+        if (keyFrameReqs >= 3) {
+            return;   // 本轮预算用完：一直不灵说明上游根本没这个能力
+        }
+        lastKeyFrameReqMs = now;
+        keyFrameReqs++;
+        boolean sent = send(0, HuProto.HU_VIDEO_ENCODER_RESET, new byte[0]);
+        log("→ 向上游请求关键帧（0x1800B）: " + why
+                + (sent ? "" : "（发送失败）")
+                + (keyFrameReqSuppressed > 0 ? "，其间抑制 " + keyFrameReqSuppressed + " 次" : ""));
+        keyFrameReqSuppressed = 0;
     }
 
     /** 自动跟随车机画布（默认开）。关闭后完全使用手动宽高/fps。 */
@@ -639,6 +670,10 @@ public final class HuClient {
     private void closeAll() {
         videoReading = false;
         audioReading = false;
+        // 每轮重连重置催帧预算
+        keyFrameReqs = 0;
+        keyFrameReqSuppressed = 0;
+        lastKeyFrameReqMs = 0;
         // ⚠️ 语音通道的「有人在读」闩锁必须跟着换代一起清：它的 finally 只在
         // gen == mediaGen 时才复位，而 closeAll 正好把 mediaGen++ 了 —— 不清这两格，
         // 第一次重连之后 9241/9242 就再也没人读（缓冲填满 → 反压 Car+ 写线程），

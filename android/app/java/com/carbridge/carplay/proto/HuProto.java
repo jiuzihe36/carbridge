@@ -41,6 +41,14 @@ public final class HuProto {
     public static final int HU_VIDEO_ENCODER_INIT = 0x00018007; // 98311
     public static final int MD_VIDEO_ENCODER_INIT = 0x00010008; // 65544
     public static final int HU_VIDEO_ENCODER_START = 0x00018009;// 98313
+    /**
+     * 视频编码器复位（HU→MD，空载荷）：让手机立刻吐一个 IDR。
+     *
+     * <p>CarLife 没有独立的「关键帧请求」消息。mcarplay 实测 0x1800B 是
+     * VIDEO_ENCODER_RESET，车机在解码器失步时用它催关键帧；CarWithin 的做法是
+     * 重发 0x18009（VIDEO_START）作低成本试探。我们优先 0x1800B，被忽略也不伤人。
+     */
+    public static final int HU_VIDEO_ENCODER_RESET = 0x0001800B; // 98315
         /**
      * 帧率变更（HU→MD），载荷 {@code CarlifeVideoFrameRate{frameRate=1}}，
      * 手机回 {@link #MD_VIDEO_ENCODER_FRAME_RATE_CHANGE_DONE}。

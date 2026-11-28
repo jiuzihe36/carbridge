@@ -73,6 +73,19 @@ public final class CarPlayBridge implements AirPlaySession.Listener {
         this.sink = sink;
     }
 
+    /** 车机要求关键帧时回调（由 MainActivity 接到 HuClient.requestKeyframe）。 */
+    private volatile Runnable keyFrameRequester;
+
+    public void setKeyFrameRequester(Runnable r) {
+        this.keyFrameRequester = r;
+    }
+
+    @Override
+    public void onForceKeyFrame() {
+        Runnable r = keyFrameRequester;
+        if (r != null) r.run();
+    }
+
     public boolean isRunning() {
         AirPlaySession s = session;   // 局部拷贝：与主线程 disconnect 竞态时二次解引用会 NPE
         return s != null && s.state() == AirPlaySession.State.STREAMING;

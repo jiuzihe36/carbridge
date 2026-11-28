@@ -201,7 +201,9 @@ public final class MfiCrypto {
         } else {
             forms = new byte[][]{signature};
         }
-        for (String alg : new String[]{"SHA256withECDSA", "SHA1withECDSA"}) {
+        // NONEwithECDSA：真 MFi AuthV3 芯片是「裸签」—— 不做二次哈希，直接对 32B 挑战
+        // 出裸 r||s（xcertplay 实测）。Java 的 NONE 变体要求输入是摘要长度，正好对上。
+        for (String alg : new String[]{"SHA256withECDSA", "SHA1withECDSA", "NONEwithECDSA"}) {
             for (byte[] form : forms) {
                 try {
                     java.security.Signature v = java.security.Signature.getInstance(alg);
