@@ -29,6 +29,7 @@ tools/*
 !tools/verify.sh
 !tools/lint.sh
 !tools/car-side.sh
+!tools/root/
 # 但测试工程的编译产物不进仓库
 tools/carbridge-tests/out/
 tools/fakecar-jvm/out/
@@ -46,3 +47,4 @@ build/*.zip
 !tools/fake-adbd.py
 !tools/adb-tests/
 !docs/AUDIT-2026-11-27.md
+tools/root/caridentity
