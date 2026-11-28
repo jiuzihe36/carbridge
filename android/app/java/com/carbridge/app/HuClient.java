@@ -1226,66 +1226,28 @@ public final class HuClient {
         }
     }
 
-    /** `su -c cat /proc/net/tcp`；拿不到 root 就返回 null（只尝试一次，失败即熔断）。 */
-    private static volatile int rootCatState;   // 0=未知 1=可用 -1=不可用
+    /** 用 root 读内核表（{@link com.carbridge.carplay.util.RootAccess} 管授权/冷却）。 */
+    private static volatile int rootCatState;   // 兼容旧日志字段：1=可用 / -1=不可用 / 0=未知
     private String readViaRoot(String path) {
-        if (rootCatState < 0) return null;
-        Process p = null;
-        try {
-            // 必须用绝对路径：应用进程的 PATH 不一定含 /system/bin，
-            // 直接 exec("su") 会报 error=2 No such file or directory（实测 ColorOS 17）。
-            String su = null;
-            for (String cand : new String[]{"/system/bin/su", "/debug_ramdisk/su",
-                    "/data/adb/ksu/bin/su", "/sbin/su", "/system/xbin/su"}) {
-                if (new java.io.File(cand).exists()) { su = cand; break; }
-            }
-            if (su == null) su = "su";
-            p = Runtime.getRuntime().exec(new String[]{su, "-c", "cat " + path});
-            final Process fp = p;
-            final java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream(4096);
-            Thread reader = new Thread(new Runnable() {
-                @Override public void run() {
-                    java.io.InputStream in = fp.getInputStream();
-                    byte[] buf = new byte[4096];
-                    int n;
-                    try {
-                        while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
-                    } catch (Throwable tDiag) { Diag.w("HuClient.run", tDiag); }
-                }
-            }, "proc-net-root");
-            reader.setDaemon(true);
-            reader.start();
-            boolean done = p.waitFor(1500, java.util.concurrent.TimeUnit.MILLISECONDS);
-            if (!done) {
-                try { p.destroy(); } catch (Throwable tDiag) { Diag.w("HuClient.readViaRoot", tDiag); }
-                if (rootCatState == 0) log("root 读 /proc/net/tcp 超时 → 本机退化为盲等端口");
-                rootCatState = -1;
-                return null;
-            }
-            reader.join(500);
-            String out = bos.toString("UTF-8");
-            if (out == null || out.indexOf(':') < 0) {   // 空的/报错输出
-                if (rootCatState == 0) {
-                    log("root 读 /proc/net/tcp 失败（su 被拒或输出为空）→ 本机退化为盲等端口");
-                }
-                rootCatState = -1;
-                return null;
-            }
-            if (rootCatState == 0) {
+        if (!com.carbridge.carplay.util.RootAccess.mayAttempt()) return null;
+        String out = com.carbridge.carplay.util.RootAccess.exec("cat " + path, 1500);
+        if (out != null && out.indexOf(':') >= 0) {
+            if (rootCatState != 1) {
                 log("已通过 root 读取 /proc/net/tcp → 可以用「六个端口齐」代替盲等");
             }
             rootCatState = 1;
             return out;
-        } catch (Throwable t) {
-            if (rootCatState == 0) {
-                log("root 读 /proc/net/tcp 不可用（" + t + "）→ 退化为盲等端口；"
-                        + "要在 SukiSU/KernelSU 里给本应用授权 root 才能用上端口观测");
-            }
-            rootCatState = -1;
-            return null;
-        } finally {
-            if (p != null) try { p.destroy(); } catch (Throwable tDiag) { Diag.w("HuClient.readViaRoot#2", tDiag); }
         }
+        if (rootCatState != -1) {
+            int st = com.carbridge.carplay.util.RootAccess.state();
+            log("root 读 /proc/net/tcp 失败（"
+                    + com.carbridge.carplay.util.RootAccess.detail()
+                    + (st == com.carbridge.carplay.util.RootAccess.DENIED
+                       ? "；在 SukiSU 里给本应用授权 root 后重启 App 即可" : "")
+                    + "）→ 退化为盲等端口");
+        }
+        rootCatState = -1;
+        return null;
     }
 
     /** /proc/net/tcp 是否可读（只用来看是否需要退化到「直连」模式）。0=未知 1=可读 -1=不可读 */

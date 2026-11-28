@@ -241,7 +241,27 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                 @Override public void onClick(View v) { showIdentityNameDialog(); }
             });
         }
-        // 启动时把「同步系统蓝牙名」的意图落地（开关关着就什么都不做）
+        // 主动探测一次 root（SukiSU 的授权框只会在应用第一次 exec su 时弹出）：
+        // 放到后台线程、给足 8 秒等人点允许。授权成功后 Car+ 端口就能「等齐再连」，
+        // 冷启动首帧比盲等 8 秒快一截。
+        com.carbridge.carplay.util.Bg.run("root-probe", new Runnable() {
+            @Override public void run() {
+                final int st = com.carbridge.carplay.util.RootAccess.probe(MainActivity.this);
+                final String det = com.carbridge.carplay.util.RootAccess.detail();
+                main.post(new Runnable() {
+                    @Override public void run() {
+                        if (st == com.carbridge.carplay.util.RootAccess.AVAILABLE) {
+                            log("root 授权可用 → 端口观测走 su（冷启动可少等几秒）");
+                        } else if (st == com.carbridge.carplay.util.RootAccess.DENIED) {
+                            log("root 未授权（" + det + "）→ 端口观测退化为盲等；"
+                                    + "要提速请在 SukiSU 里给 carbridge 授权 root");
+                        } else {
+                            log("root 探测未完成（" + det + "）；下次启动或连接时再试");
+                        }
+                    }
+                });
+            }
+        });
         try {
             if (com.carbridge.carplay.IdentityName.applySystemNameIfEnabled(this)) {
                 log("系统蓝牙名已按身份名同步：" + com.carbridge.carplay.IdentityName.resolve(this));
