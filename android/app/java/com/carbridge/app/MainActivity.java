@@ -251,12 +251,17 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                 main.post(new Runnable() {
                     @Override public void run() {
                         if (st == com.carbridge.carplay.util.RootAccess.AVAILABLE) {
-                            log("root 授权可用 → 端口观测走 su（冷启动可少等几秒）");
-                        } else if (st == com.carbridge.carplay.util.RootAccess.DENIED) {
-                            log("root 未授权（" + det + "）→ 端口观测退化为盲等；"
-                                    + "要提速请在 SukiSU 里给 carbridge 授权 root");
+                            log("root 可用（可选加速）→ 端口观测走 su，冷启动可少等几秒");
                         } else {
-                            log("root 探测未完成（" + det + "）；下次启动或连接时再试");
+                            // root 明确是可选项：没有它一切功能照常，只影响冷启动等待。
+                            // 只提示一次，避免每次启动都刷「未授权」让人以为坏了。
+                            android.content.SharedPreferences sp =
+                                    getSharedPreferences(PREF_NAME, MODE_PRIVATE);
+                            if (!sp.getBoolean("root_hint_shown", false)) {
+                                sp.edit().putBoolean("root_hint_shown", true).apply();
+                                log("未使用 root（可选功能）：端口观测按盲等处理（冷启动多等几秒，"
+                                        + "不影响投屏/信标/认证）。想要加速可在 SukiSU 里授权后重启 App");
+                            }
                         }
                     }
                 });

@@ -29,8 +29,8 @@ public final class RootAccess {
     public static final int AVAILABLE = 1;
     public static final int DENIED = -1;
 
-    /** 弹框等待上限：SukiSU 的授权框要人点，给足 8 秒。 */
-    private static final long PROMPT_TIMEOUT_MS = 8000L;
+    /** 弹框等待上限：SukiSU 的授权框要人点，给 4 秒（纯可选项，不值得为它多等）。 */
+    private static final long PROMPT_TIMEOUT_MS = 4000L;
     /** 被拒后的冷却期：冷却期内不 fork su（轮询很密）。 */
     private static final long DENIED_COOLDOWN_MS = 60_000L;
 
