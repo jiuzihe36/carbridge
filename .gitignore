@@ -18,6 +18,7 @@ research/
 docs/*.md
 !docs/ARCHITECTURE.md
 !docs/STATUS.md
+!docs/CAR-FIRMWARE-CACHE.md
 tools/*
 !tools/fakecar/
 # 测试与守卫脚本要跟随仓库：它们定义了「改完怎么验」
