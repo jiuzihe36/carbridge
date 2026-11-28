@@ -194,6 +194,10 @@ public final class AirPlaySession {
 
     /** 是否已配对。配对后控制通道走 ChaCha20-Poly1305（带 tag、AAD=长度头），`SETUP /setup` 省略 et。 */
     private volatile boolean paired;
+    /** 已经成功 RECORD：只有进入过推流态的会话才需要 TEARDOWN 收尾。 */
+    private volatile boolean recordedOnce;
+    /** 音频输出延迟（openAudioStream 里算出来），TEARDOWN 前要等它播完。 */
+    private volatile long audioLatencyForTeardownMs = 25;
     private volatile ControlCipher controlEncryptor;
     private volatile ControlCipher controlDecryptor;
     /** 配对后常驻的解密输入流（缓存解出来的明文，避免丢弃响应之后的字节）。 */
@@ -420,11 +424,74 @@ public final class AirPlaySession {
     public void stop() {
         if (CURRENT == this) CURRENT = null;
         running = false;
+        boolean wasRecorded = recordedOnce;
         // ⚠️ 先把终态钉死，再去关 socket：关 socket 会立刻唤醒阻塞在 read 上的会话线程，
         //    它的 catch 以前会无条件 setState(ERROR) —— 用户手动断开就被上报成故障，
         //    上层收到 onAirPlayFailed 会重发 0x5702，把刚被断开的车机又拉起重连。
         setState(State.CLOSED);
-        closeAllResources();
+        if (wasRecorded) {
+            // 停流收尾要发 TEARDOWN（catplay 实证）：不发的代价是「最后一句话被截断」
+            // 与「重开流后车机还显示旧画面」。顺序：先关媒体 → 等音频播完 → 再发。
+            sendTeardownAndCleanup();
+        } else {
+            closeAllResources();
+        }
+    }
+
+    /**
+     * 停流收尾：按 catplay 的顺序「关屏幕流 → 等音频播完 → 发 TEARDOWN → 关其余通道」。
+     *
+     * <p>在独立守护线程里跑：TEARDOWN 最长等 2s，超时就强行关控制通道（会唤醒阻塞读），
+     * 只记日志、不阻塞下一条流的 SETUP。
+     */
+    private void sendTeardownAndCleanup() {
+        Thread t = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                java.util.Timer killer = new java.util.Timer("teardown-killer", true);
+                try {
+                    // 1) 屏幕流：TCP 立刻关，不等延迟
+                    closeQuietly(videoChannel);
+                    videoOut = null;
+                    // 2) 音频：等已经发出去的音频播完（latency + 10ms）
+                    if (audioSocket != null) {
+                        long wait = Math.max(0L, audioLatencyForTeardownMs + 10L);
+                        try {
+                            Thread.sleep(wait);
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                        }
+                        try {
+                            audioSocket.close();   // DatagramSocket：没有 closeQuietly(Socket) 重载
+                        } catch (Throwable tDiag) {
+                            Diag.w("AirPlaySession.teardownAudio", tDiag);
+                        }
+                        audioSocket = null;
+                    }
+                    // 3) TEARDOWN：2s 硬顶（超时直接关控制通道把阻塞读打断）
+                    final java.net.Socket ctl = control;
+                    if (ctl != null) {
+                        killer.schedule(new java.util.TimerTask() {
+                            @Override public void run() {
+                                closeQuietly(ctl);
+                            }
+                        }, 2000);
+                        try {
+                            requestRaw("TEARDOWN", "/", null);
+                            log("已发送 TEARDOWN（停流收尾完成）");
+                        } catch (Throwable te) {
+                            log("TEARDOWN 未在 2s 内完成（忽略）：" + te);
+                        }
+                    }
+                } finally {
+                    killer.cancel();
+                    closeAllResources();
+                    recordedOnce = false;
+                }
+            }
+        }, "airplay-teardown");
+        t.setDaemon(true);
+        t.start();
     }
 
     /** 关闭本轮打开的全部 socket/编码器（不触碰状态机）。stop() 与失败清理共用。 */
@@ -530,6 +597,7 @@ public final class AirPlaySession {
 
             // RECORD 必须在 modesChanged 之前（CarDeck 实测顺序）
             requestRaw("RECORD", "/", null);
+            recordedOnce = true;
             sendModesChanged();
             setState(State.SETTING_UP);
 
@@ -1169,6 +1237,7 @@ public final class AirPlaySession {
         stream.put("audioFormat", formatBit);
         stream.put("streamConnectionID", audioConnId);
         stream.put("audioLatencyMs", latencyMs);
+        audioLatencyForTeardownMs = latencyMs;
         stream.put("supportsRTPPacketRedundancy", false);
         // 真 iPhone 也会在流的 SETUP 里报能力清单 + 会话 UUID
         stream.put("features", featuresList());

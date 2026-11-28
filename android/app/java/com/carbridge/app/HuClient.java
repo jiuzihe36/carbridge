@@ -252,6 +252,8 @@ public final class HuClient {
     private volatile long lastKeyFrameReqMs;
     private int keyFrameReqs;
     private int keyFrameReqSuppressed;
+    /** 视频帧双长度不一致的计数（诊断用，不丢帧）。 */
+    private int lenMismatch;
     /**
      * 运行中动态改帧率（车机 /info 在推流后才到）。
      *
@@ -674,6 +676,7 @@ public final class HuClient {
         keyFrameReqs = 0;
         keyFrameReqSuppressed = 0;
         lastKeyFrameReqMs = 0;
+        lenMismatch = 0;
         // ⚠️ 语音通道的「有人在读」闩锁必须跟着换代一起清：它的 finally 只在
         // gen == mediaGen 时才复位，而 closeAll 正好把 mediaGen++ 了 —— 不清这两格，
         // 第一次重连之后 9241/9242 就再也没人读（缓冲填满 → 反压 Car+ 写线程），
@@ -1844,6 +1847,20 @@ public final class HuClient {
                     return;
                 }
                 byte[] payload = readN(s, len);
+                if (payload != null && payload.length >= 4) {
+                    // 双长度交叉校验（carlife-protocol-analysis-tool 的规格）：
+                    // 外层 len 应等于「12B 内层头 + 内层 msg_data_len」。先只做**诊断**、
+                    // 不丢帧 —— 我们自己的抓包还没有直接证据，误判不能伤到能用的链路。
+                    long inner = ((payload[0] & 0xFFL) << 24) | ((payload[1] & 0xFFL) << 16)
+                            | ((payload[2] & 0xFFL) << 8) | (payload[3] & 0xFFL);
+                    if (inner != payload.length - 12) {
+                        lenMismatch++;
+                        if (lenMismatch == 1 || lenMismatch % 100 == 0) {
+                            log("视频帧双长度不一致 " + lenMismatch + " 次（外层 "
+                                    + payload.length + "B，内层声明 " + inner + "B）— 仅诊断");
+                        }
+                    }
+                }
                 if (payload == null) {
                     // 帧体读到一半就断了：线程静默退出会让「视频已死」这件事无人知晓
                     // （CMD 心跳还会一直刷新活性，外层永不判停）→ 黑屏且不重连。
