@@ -29,15 +29,17 @@ public final class IdentitySection {
 
     private final Host host;
     private final TextView vName, vMac, vSdp, vSrcvers;
+    private final TextView vIdentityName;
     private final View hint;
 
     public IdentitySection(Host host, TextView vName, TextView vMac, TextView vSdp,
-                           TextView vSrcvers, View hint) {
+                           TextView vSrcvers, TextView vIdentityName, View hint) {
         this.host = host;
         this.vName = vName;
         this.vMac = vMac;
         this.vSdp = vSdp;
         this.vSrcvers = vSrcvers;
+        this.vIdentityName = vIdentityName;
         this.hint = hint;
     }
 
@@ -78,6 +80,10 @@ public final class IdentitySection {
         }
         if (vSrcvers != null) {
             vSrcvers.setText(CarPlayCtrlCompat.srcvers(act));
+        }
+        if (vIdentityName != null) {
+            // 身份名单一真源：iAP2 识别 / mDNS 实例名 /（可选）系统蓝牙名 三处同源
+            vIdentityName.setText(com.carbridge.carplay.IdentityName.describe(act));
         }
     }
 

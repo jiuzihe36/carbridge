@@ -552,15 +552,13 @@ public final class CarPlayWirelessTx {
 
     /** 本机蓝牙名（0x4E09 设备信息用；拿不到就报 "iPhone"）。 */
     private String btName() {
+        // 身份名单一真源：iAP2 识别/mDNS/系统蓝牙名三处同源（见 IdentityName）
         try {
-            android.bluetooth.BluetoothAdapter a =
-                    com.carbridge.carplay.bt.Bt.adapter(this.ctx);
-            if (a != null && a.getName() != null && !a.getName().isEmpty()) {
-                return a.getName();
-            }
-        } catch (Throwable t) { com.carbridge.carplay.util.Diag.w("CarPlayWirelessTx", t);
+            return com.carbridge.carplay.IdentityName.resolve(ctx);
+        } catch (Throwable t) {
+            com.carbridge.carplay.util.Diag.w("CarPlayWirelessTx", t);
+            return com.carbridge.carplay.IdentityName.FALLBACK;
         }
-        return "iPhone";
     }
 
     // ---------------------------------------------------------------- 兜底看门狗
@@ -952,7 +950,8 @@ public final class CarPlayWirelessTx {
         if (ctrlPort > 0) {
             // 只广播**实际绑定**的端口：以前绑定失败也广播 7100，车机反连必失败，
             // 现场只看到「服务起不来」而看不出是端口问题。
-            mdns.advertiseCtrl(ctrlPort, realBtMac, CarPlayCtrlCompat.srcvers(ctx));
+            mdns.advertiseCtrl(ctrlPort, realBtMac, CarPlayCtrlCompat.srcvers(ctx),
+                    com.carbridge.carplay.IdentityName.resolve(ctx));
         } else {
             log("⚠ ctrl-int 未起监听 → 不广播 _carplay-ctrl（车机反连会失败，AirPlay 主链路不受影响）");
         }

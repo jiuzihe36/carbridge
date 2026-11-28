@@ -218,6 +218,21 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         idBtMac = (TextView) findViewById(R.id.id_bt_mac);
         idSdp = (TextView) findViewById(R.id.id_sdp);
         idSrcvers = (TextView) findViewById(R.id.id_srcvers);
+        idIdentityName = (TextView) findViewById(R.id.id_identity_name);
+        View rowIdentityName = findViewById(R.id.row_identity_name);
+        if (rowIdentityName != null) {
+            rowIdentityName.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { showIdentityNameDialog(); }
+            });
+        }
+        // 启动时把「同步系统蓝牙名」的意图落地（开关关着就什么都不做）
+        try {
+            if (com.carbridge.carplay.IdentityName.applySystemNameIfEnabled(this)) {
+                log("系统蓝牙名已按身份名同步：" + com.carbridge.carplay.IdentityName.resolve(this));
+            }
+        } catch (Throwable tDiag) {
+            com.carbridge.carplay.util.Diag.w("MainActivity.identityName", tDiag);
+        }
         identityHint = findViewById(R.id.identity_hint);
         View rowMac = findViewById(R.id.row_bt_mac);
         if (rowMac != null) {
@@ -1419,6 +1434,8 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
 
     // ------------------------------------------------------------ 本机身份
     private TextView idBtName, idBtMac, idSdp, idSrcvers;
+    /** 身份名当前值（iAP2/mDNS/系统蓝牙名三处同源，见 IdentityName）。 */
+    private TextView idIdentityName;
     private View identityHint;
     private IdentitySection identitySection;
 
@@ -1430,7 +1447,7 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                         @Override public void log(String line) { MainActivity.this.log(line); }
                         @Override public int color(int colorRes) { return getColorCompat(colorRes); }
                     },
-                    idBtName, idBtMac, idSdp, idSrcvers, identityHint);
+                    idBtName, idBtMac, idSdp, idSrcvers, idIdentityName, identityHint);
         }
         return identitySection;
     }
@@ -1522,7 +1539,94 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         );
     }
 
-    /** 广播版本（mDNS TXT 的 srcvers）：预设三档 + 自定义，改完下次连接生效。 */
+    /**
+     * 身份名设置：跟随本机蓝牙名 / iPhone / 自定义，外加「同步系统蓝牙名」开关。
+     *
+     * <p>三处同源（iAP2 识别 / mDNS 实例名 / 可选系统蓝牙名），见 {@link com.carbridge.carplay.IdentityName}。
+     */
+    private void showIdentityNameDialog() {
+        final int curMode = com.carbridge.carplay.IdentityName.mode(this);
+        final String curCustom = com.carbridge.carplay.IdentityName.custom(this);
+
+        int pad = dp(20f);
+        final android.widget.LinearLayout box = new android.widget.LinearLayout(this);
+        box.setOrientation(android.widget.LinearLayout.VERTICAL);
+        box.setPadding(pad, dp(8f), pad, 0);
+
+        final android.widget.RadioGroup rg = new android.widget.RadioGroup(this);
+        final android.widget.RadioButton rbFollow = new android.widget.RadioButton(this);
+        rbFollow.setId(1001);
+        String btNow = null;
+        try {
+            android.bluetooth.BluetoothAdapter a =
+                    com.carbridge.carplay.bt.Bt.adapter(this);
+            if (a != null) btNow = a.getName();
+        } catch (Throwable tDiag) {
+            com.carbridge.carplay.util.Diag.w("MainActivity.identityNameDialog", tDiag);
+        }
+        rbFollow.setText(getString(R.string.identity_name_mode_follow)
+                + "（" + (btNow == null || btNow.isEmpty() ? "?" : btNow) + "）");
+        final android.widget.RadioButton rbIphone = new android.widget.RadioButton(this);
+        rbIphone.setId(1002);
+        rbIphone.setText(R.string.identity_name_mode_iphone);
+        final android.widget.RadioButton rbCustom = new android.widget.RadioButton(this);
+        rbCustom.setId(1003);
+        rbCustom.setText(R.string.identity_name_mode_custom);
+        rg.addView(rbFollow);
+        rg.addView(rbIphone);
+        rg.addView(rbCustom);
+        rg.check(curMode == com.carbridge.carplay.IdentityName.MODE_IPHONE ? 1002
+                : curMode == com.carbridge.carplay.IdentityName.MODE_CUSTOM ? 1003 : 1001);
+
+        final android.widget.EditText et = new android.widget.EditText(this);
+        et.setHint(R.string.identity_name_custom_hint);
+        et.setText(curCustom);
+        et.setVisibility(curMode == com.carbridge.carplay.IdentityName.MODE_CUSTOM
+                ? View.VISIBLE : View.GONE);
+        final android.widget.CheckBox cb = new android.widget.CheckBox(this);
+        cb.setText(R.string.identity_name_sync_bt);
+        cb.setChecked(com.carbridge.carplay.IdentityName.syncSystemName(this));
+        cb.setEnabled(rg.getCheckedRadioButtonId() != 1001);
+        rg.setOnCheckedChangeListener(new android.widget.RadioGroup.OnCheckedChangeListener() {
+            @Override public void onCheckedChanged(android.widget.RadioGroup group, int checkedId) {
+                et.setVisibility(checkedId == 1003 ? View.VISIBLE : View.GONE);
+                // 「跟随蓝牙名」时同步开关没有意义（名字本来就一样）
+                cb.setEnabled(checkedId != 1001);
+                if (checkedId == 1001) cb.setChecked(false);
+            }
+        });
+        android.widget.TextView hint = new android.widget.TextView(this);
+        hint.setText(R.string.identity_name_sync_hint);
+        hint.setTextSize(12f);
+        hint.setTextColor(getColorCompat(R.color.text_muted));
+
+        box.addView(rg);
+        box.addView(et);
+        box.addView(cb);
+        box.addView(hint);
+
+        showDialog(new AlertDialog.Builder(this)
+                .setTitle(R.string.identity_name_dialog_title)
+                .setView(box)
+                .setPositiveButton(R.string.ok, new DialogInterface.OnClickListener() {
+                    @Override public void onClick(DialogInterface dialog, int which) {
+                        int checked = rg.getCheckedRadioButtonId();
+                        int mode = checked == 1002 ? com.carbridge.carplay.IdentityName.MODE_IPHONE
+                                : checked == 1003 ? com.carbridge.carplay.IdentityName.MODE_CUSTOM
+                                : com.carbridge.carplay.IdentityName.MODE_FOLLOW;
+                        com.carbridge.carplay.IdentityName.save(MainActivity.this, mode,
+                                et.getText().toString(), cb.isChecked());
+                        boolean synced = com.carbridge.carplay.IdentityName.applySystemNameIfEnabled(MainActivity.this);
+                        String name = com.carbridge.carplay.IdentityName.resolve(MainActivity.this);
+                        log(getString(R.string.identity_name_applied, name,
+                                getString(synced ? R.string.identity_name_sync_yes
+                                        : R.string.identity_name_sync_no)));
+                        identity().refresh();
+                    }
+                })
+                .setNegativeButton(android.R.string.cancel, null));
+    }
+
     private void showSrcversDialog() {
         final java.util.List<String> values = new java.util.ArrayList<String>();
         final java.util.List<String> labels = new java.util.ArrayList<String>();

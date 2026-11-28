@@ -737,7 +737,9 @@ public final class Iap2SenderSession {
      */
     private byte[] buildOurIdentification() {
         return Iap2Csm.concat(
-                Iap2Csm.paramString(Iap2Ids.Id.NAME, "iPhone"),
+                // 身份名与 iAP2 其它消息/mDNS 同源（deviceName 由 setDeviceIdentity 注入，
+                // 来源 IdentityName）。以前这里写死 "iPhone"，与系统蓝牙名/ mDNS 三处不一致。
+                Iap2Csm.paramString(Iap2Ids.Id.NAME, deviceName),
                 Iap2Csm.paramString(Iap2Ids.Id.MODEL_IDENTIFIER, "iPhone19,4"),
                 Iap2Csm.paramString(Iap2Ids.Id.MANUFACTURER, "Apple Inc."),
                 Iap2Csm.paramString(Iap2Ids.Id.SERIAL_NUMBER, identificationSerial()),

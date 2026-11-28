@@ -30,6 +30,7 @@ public final class SelfTests {
         geometry();
         adaptive();
         csm();
+        identityName();
         link();
         mfi();
         quality();
@@ -251,6 +252,26 @@ public final class SelfTests {
         for (int i = 0; i < 9; i++) profiles[i * 2 + 1] = (byte) i;
         Iap2Csm.Param pp = Iap2Csm.find(Iap2Csm.parseParams(Iap2Csm.param(1, profiles)), 1);
         check(pp != null && pp.value.length == 18, "0x4E04 profile 表 9 项（第 19 批）");
+    }
+
+    // ---------------------------------------------------------------- 身份名
+    private static void identityName() {
+        section("IdentityNamePolicy（身份名单一真源）");
+        check("iPhone".equals(com.carbridge.carplay.IdentityNamePolicy.resolve(
+                com.carbridge.carplay.IdentityNamePolicy.MODE_IPHONE, "x", "OPPO PKG110")),
+                "iPhone 模式固定 iPhone");
+        check("OPPO PKG110".equals(com.carbridge.carplay.IdentityNamePolicy.resolve(
+                com.carbridge.carplay.IdentityNamePolicy.MODE_FOLLOW, "", " OPPO PKG110 ")),
+                "跟随模式取蓝牙名（去空白）");
+        check("iPhone".equals(com.carbridge.carplay.IdentityNamePolicy.resolve(
+                com.carbridge.carplay.IdentityNamePolicy.MODE_FOLLOW, "", "   ")),
+                "蓝牙名取不到 → 兜底 iPhone");
+        check("我的车".equals(com.carbridge.carplay.IdentityNamePolicy.resolve(
+                com.carbridge.carplay.IdentityNamePolicy.MODE_CUSTOM, " 我的车 ", "x")),
+                "自定义名生效");
+        check("iPhone".equals(com.carbridge.carplay.IdentityNamePolicy.resolve(
+                com.carbridge.carplay.IdentityNamePolicy.MODE_CUSTOM, "  ", "x")),
+                "自定义为空 → 兜底 iPhone");
     }
 
     // ---------------------------------------------------------------- 链路层

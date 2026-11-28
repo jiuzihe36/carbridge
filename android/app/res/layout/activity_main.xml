@@ -332,6 +332,49 @@
                         android:layout_marginStart="16dp"
                         android:background="@color/divider" />
 
+                    <!-- 身份名（iAP2/mDNS/系统蓝牙名三处同源） -->
+                    <LinearLayout
+                        android:id="@+id/row_identity_name"
+                        android:layout_width="match_parent"
+                        android:layout_height="48dp"
+                        android:background="?android:attr/selectableItemBackground"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingStart="16dp"
+                        android:paddingEnd="12dp">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="@string/identity_name"
+                            android:textColor="@color/ink"
+                            android:textSize="15sp" />
+
+                        <TextView
+                            android:id="@+id/id_identity_name"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:maxLines="1"
+                            android:text="@string/metric_placeholder"
+                            android:textColor="@color/text_muted"
+                            android:textSize="15sp" />
+
+                        <ImageView
+                            android:layout_width="14dp"
+                            android:layout_height="14dp"
+                            android:layout_marginStart="6dp"
+                            android:contentDescription="@null"
+                            android:src="@drawable/ic_chevron_right"
+                            android:tint="@color/text_muted" />
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:layout_marginStart="16dp"
+                        android:background="@color/divider" />
+
                     <!-- 广播版本（点击切换） -->
                     <LinearLayout
                         android:id="@+id/row_srcvers"

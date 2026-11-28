@@ -67,14 +67,26 @@ public final class MdnsCarPlay {
      *                它和 RTSP 的 sourceVersion 不是同一个字段，不能混用。
      */
     public void advertiseCtrl(int port, String realMac, String srcvers) {
+        advertiseCtrl(port, realMac, srcvers, null);
+    }
+
+    /**
+     * 带身份名注册 ctrl-int 服务（身份名单一真源：与 iAP2 identify/系统蓝牙名同源）。
+     *
+     * @param name 实例名（车机在 mDNS 里看到的展示名）；null/空 = "iPhone"
+     */
+    public void advertiseCtrl(int port, String realMac, String srcvers, String name) {
         if (ctrlInfo != null) {
             // 已注册过就复用（换端口才需要重来）
             return;
         }
         unregisterCtrl();
         NsdServiceInfo info = new NsdServiceInfo();
-        // 实例名用 "iPhone"：真 iPhone 就是这么广播的，车机可能按名字识别。
-        info.setServiceName("iPhone");
+        // 实例名：以前写死 "iPhone"；现在与 iAP2 识别名一致（车机在 mDNS 与服务列表里
+        // 看到同一个名字，不再出现「设置里叫 A、CarPlay 里叫 B」）。
+        String inst = name == null || name.trim().isEmpty()
+                ? com.carbridge.carplay.IdentityName.FALLBACK : name.trim();
+        info.setServiceName(inst);
         info.setServiceType(SERVICE_TYPE_CTRL);
         info.setPort(port);
         if (realMac != null) {
