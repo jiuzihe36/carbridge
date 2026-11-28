@@ -46,7 +46,43 @@ public final class CarSideSetup {
     public static final String DEFAULT_CAR_IP = "192.168.33.92";
     public static final int ADB_PORT = 5555;
 
+    /** 用户自定义的车机 IP（车机 IP 不固定，扫网段又慢又可能不在同网段）。 */
+    public static final String PREF_CAR = "carbridge_car";
+    public static final String KEY_CAR_IP = "car_ip";
+
     private CarSideSetup() {
+    }
+
+    /** 已保存的车机 IP；空/非法 = 未设置（自动扫描）。 */
+    public static String savedIp(Context ctx) {
+        String v = ctx.getApplicationContext()
+                .getSharedPreferences(PREF_CAR, Context.MODE_PRIVATE)
+                .getString(KEY_CAR_IP, "");
+        v = v == null ? "" : v.trim();
+        return isIpv4(v) ? v : "";
+    }
+
+    /** 保存车机 IP（传空 = 清除，回到自动扫描）。 */
+    public static void saveIp(Context ctx, String ip) {
+        String v = ip == null ? "" : ip.trim();
+        ctx.getApplicationContext()
+                .getSharedPreferences(PREF_CAR, Context.MODE_PRIVATE)
+                .edit().putString(KEY_CAR_IP, isIpv4(v) ? v : "").apply();
+    }
+
+    private static boolean isIpv4(String s) {
+        if (s == null || s.isEmpty()) return false;
+        String[] parts = s.split("\\.");
+        if (parts.length != 4) return false;
+        for (String p : parts) {
+            try {
+                int v = Integer.parseInt(p);
+                if (v < 0 || v > 255) return false;
+            } catch (Throwable t) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** 一次执行的结果。 */
@@ -80,7 +116,7 @@ public final class CarSideSetup {
         } catch (Throwable t) {
             return new Result(false, null, "安装包里没有 adb 密钥（assets/adbkey 缺失）");
         }
-        List<String> candidates = candidates(log);
+        List<String> candidates = candidates(ctx, log);
         if (candidates.isEmpty()) {
             return new Result(false, null, "没找到车机：手机要先连上车机的 Wi-Fi 热点");
         }
@@ -280,7 +316,7 @@ public final class CarSideSetup {
             return new Result(false, null, "安装包里没有 adb 密钥（assets/adbkey 缺失）");
         }
 
-        List<String> candidates = candidates(log);
+        List<String> candidates = candidates(ctx, log);
         if (candidates.isEmpty()) {
             return new Result(false, null, "没找到车机：手机要先连上车机的 Wi-Fi 热点（xiaohu）");
         }
@@ -359,8 +395,15 @@ public final class CarSideSetup {
      *
      * <p>为什么扫而不是写死：车机热点重启后 DHCP 段可能变，写死一个 IP 现场就会「找不到车机」。
      */
-    private static List<String> candidates(Log log) {
+    private static List<String> candidates(android.content.Context ctx, Log log) {
         List<String> out = new ArrayList<String>();
+        // 用户指定了车机 IP：只用它（换 IP 是常态；扫网段又慢又可能扫不到）
+        String saved = savedIp(ctx);
+        if (!saved.isEmpty()) {
+            log.log("使用已设置的车机 IP：" + saved + "（清空设置可回到自动扫描）");
+            out.add(saved);
+            return out;
+        }
         String local = wifiIpv4();
         if (local == null) {
             log.log("手机当前不在 Wi-Fi 上（车机热点没连）");

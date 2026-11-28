@@ -2056,18 +2056,38 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
      * 不需要在车机屏幕上点「允许调试」。
      */
     private void showCarSideDialog() {
+        // 车机 IP 不固定：每次都能改，留空 = 自动扫本网段
+        int pad = dp(20f);
+        android.widget.LinearLayout box = new android.widget.LinearLayout(this);
+        box.setOrientation(android.widget.LinearLayout.VERTICAL);
+        box.setPadding(pad, dp(4f), pad, 0);
+        TextView msg = new TextView(this);
+        msg.setText(R.string.car_side_msg);
+        msg.setTextSize(13f);
+        msg.setTextColor(getColorCompat(R.color.text_muted));
+        final android.widget.EditText et = new android.widget.EditText(this);
+        et.setHint(R.string.car_side_ip_hint);
+        et.setText(com.carbridge.car.CarSideSetup.savedIp(this));
+        et.setInputType(android.text.InputType.TYPE_CLASS_TEXT);
+        box.addView(msg);
+        box.addView(et);
+
         showDialog(new AlertDialog.Builder(this)
                 .setTitle(R.string.btn_car_side)
-                .setMessage(R.string.car_side_msg)
+                .setView(box)
                 .setPositiveButton(R.string.car_side_run, new DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(DialogInterface dialog, int which) {
+                        com.carbridge.car.CarSideSetup.saveIp(MainActivity.this,
+                                et.getText().toString());
                         runCarSideSetup();
                     }
                 })
                 .setNeutralButton(R.string.car_side_inspect, new DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(DialogInterface dialog, int which) {
+                        com.carbridge.car.CarSideSetup.saveIp(MainActivity.this,
+                                et.getText().toString());
                         runCarSideInspect();
                     }
                 })
