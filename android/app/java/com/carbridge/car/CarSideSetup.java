@@ -63,6 +63,86 @@ public final class CarSideSetup {
     }
 
     /**
+     * 只读探查：把车机侧「CarPlay 设备缓存」相关文件全部读出来打进日志（不修改任何东西）。
+     *
+     * <p>依据（product.img / libcarplayserver_R14_vehicle.so 固件实证）：
+     * 车机的设备列表存在 {@code /data/vehicle/data/carplay_device_info.dat}
+     * （SVPCarPlay_DeviceMgr::ReadDeviceListFile，fopen/fread 的裸结构，键含
+     * deviceID/displayUUID/transportType/name/model/BTLE），另有
+     * {@code wireless_carplay_vendor_ie.dat}（无线识别 IE）。
+     * 先把这两个文件与蓝牙配对库读出来，才能确定「把手机改成 iPhone」要改哪几个字节。
+     */
+    public static Result inspect(Context ctx, String phoneMac, Log log) {
+        String pem, pub;
+        try {
+            pem = readAsset(ctx, "adbkey");
+            pub = readAsset(ctx, "adbkey.pub");
+        } catch (Throwable t) {
+            return new Result(false, null, "安装包里没有 adb 密钥（assets/adbkey 缺失）");
+        }
+        List<String> candidates = candidates(log);
+        if (candidates.isEmpty()) {
+            return new Result(false, null, "没找到车机：手机要先连上车机的 Wi-Fi 热点");
+        }
+        AdbClient client = new AdbClient(new AdbClient.Log() {
+            @Override public void log(String line) { log.log(line); }
+        });
+        String target = null;
+        Throwable last = null;
+        for (String ip : candidates) {
+            try {
+                client.connect(ip, ADB_PORT, pem, pub, 2500);
+                target = ip;
+                break;
+            } catch (Throwable t) {
+                last = t;
+            }
+        }
+        if (target == null) return new Result(false, null, "连不上车机 adb：" + brief(last));
+
+        try {
+            Sh sh = new Sh(client, log);
+            log.log("── 只读诊断（不改任何东西）：车机 " + target + " ──");
+
+            log.log("── /data/vehicle/data 目录 ──");
+            log.log("  " + oneLine(sh.run("ls -l /data/vehicle/data/ 2>&1")));
+
+            String dat = "/data/vehicle/data/carplay_device_info.dat";
+            log.log("── 设备缓存 " + dat + " ──");
+            log.log("  " + oneLine(sh.run("ls -l " + dat + " 2>&1")));
+            String hex = sh.run("od -A d -t x1 " + dat + " 2>&1 | head -200");
+            for (String line : tail(hex, 60)) log.log("  " + line);
+            String ascii = sh.run("cat " + dat + " 2>/dev/null | tr -c '[:print:]' '\\n' | grep -E '.{5,}' | head -40");
+            log.log("  ── 可读字符串 ──");
+            for (String line : tail(ascii, 30)) log.log("   · " + line);
+
+            String ie = "/data/vehicle/data/wireless_carplay_vendor_ie.dat";
+            log.log("── 无线识别 IE " + ie + " ──");
+            String ieHex = sh.run("od -A d -t x1 " + ie + " 2>&1 | head -60");
+            for (String line : tail(ieHex, 24)) log.log("  " + line);
+
+            log.log("── 车机 CarPlay 相关属性 ──");
+            for (String line : tail(sh.run("getprop | grep -iE 'carplay|ipod' 2>&1"), 20)) {
+                log.log("  " + line);
+            }
+
+            log.log("── 车机蓝牙配对库（本机 MAC 条目）──");
+            String mac = phoneMac == null ? "" : phoneMac.toUpperCase(java.util.Locale.US);
+            String conf = sh.run("grep -A12 -B2 -i '" + mac + "' /data/misc/bluedroid/bt_config.conf 2>&1");
+            if (conf == null || conf.trim().isEmpty()) {
+                log.log("  （没有本机条目；或读不到 bt_config.conf）");
+            } else {
+                for (String line : tail(conf, 30)) log.log("  " + line);
+            }
+            log.log("── 诊断结束（以上全部只读）──");
+            return new Result(true, target, "诊断完成：把日志里「设备缓存 / 配对库」两段发我，"
+                    + "就能确定要不要改、改哪几个字节");
+        } catch (Throwable t) {
+            return new Result(false, target, "诊断失败：" + brief(t));
+        }
+    }
+
+    /**
      * 属性写不进去时的第二条路：把 helper 推到车机装上，让它替我们点那个被灰掉的 CarPlay 项。
      *
      * <p>helper（{@code com.carbridge.carforce}，12 KB，只申请蓝牙权限）会：

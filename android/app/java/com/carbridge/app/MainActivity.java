@@ -2065,8 +2065,42 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
                         runCarSideSetup();
                     }
                 })
+                .setNeutralButton(R.string.car_side_inspect, new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        runCarSideInspect();
+                    }
+                })
                 .setNegativeButton(R.string.repair_cancel, null)
         );
+    }
+
+    /** 只读诊断车机侧缓存（不改任何东西）：上车连热点后跑一次，把日志两段发我。 */
+    private void runCarSideInspect() {
+        Toast.makeText(this, R.string.car_side_running, Toast.LENGTH_LONG).show();
+        log("── 车机缓存只读诊断 ──");
+        com.carbridge.carplay.util.Bg.run("car-side-inspect", new Runnable() {
+            @Override
+            public void run() {
+                String mac = com.carbridge.carplay.bt.BtIdentity.peek(MainActivity.this).ok()
+                        ? com.carbridge.carplay.bt.BtIdentity.peek(MainActivity.this).mac
+                        : com.carbridge.carplay.bt.BtIdentity.resolve(MainActivity.this, false).mac;
+                final com.carbridge.car.CarSideSetup.Result r =
+                        com.carbridge.car.CarSideSetup.inspect(MainActivity.this, mac,
+                                new com.carbridge.car.CarSideSetup.Log() {
+                                    @Override public void log(String line) {
+                                        MainActivity.this.log(line);
+                                    }
+                                });
+                log((r.ok ? "✓ " : "✗ ") + r.message);
+                final String msg = r.message;
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        Toast.makeText(MainActivity.this, msg, Toast.LENGTH_LONG).show();
+                    }
+                });
+            }
+        });
     }
 
     /** 后台跑车机侧流程：扫网段 → adb 连接 → 写属性 → 重启车机 CarPlay 应用。 */
