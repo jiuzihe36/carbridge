@@ -53,6 +53,9 @@
     <string name="hint_manual">Car+ 没把 CarLife 通道打开。请在「如何连接」里点「连接诊断」检查权限，或重新打开 Car+ 后再试。</string>
     <string name="hint">App 启动会先做 CarPlay 配对/鉴权，让车机认出本机是 iPhone；Car+ 推流仍按原来的流程自动运行，不需要等鉴权完成。</string>
     <string name="log_title">运行日志</string>
+    <string name="log_search_hint">搜索日志（如 SDP / 0x4301 / 认证）</string>
+    <string name="log_search_count">匹配 %1$d / 共 %2$d 行</string>
+    <string name="log_search_none">无匹配（已扫描 %1$d 行）</string>
     <string name="btn_copy_log">复制</string>
     <string name="btn_share_log">导出</string>
     <string name="copied">日志已复制</string>

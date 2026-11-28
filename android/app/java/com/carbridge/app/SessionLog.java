@@ -85,6 +85,32 @@ public final class SessionLog {
         return tail(Integer.MAX_VALUE);
     }
 
+    /** 搜索结果：匹配行拼接文本 + 统计（UI 用，不落盘）。 */
+    public static final class SearchResult {
+        public final String text;
+        public final int matches;
+        public final int scanned;
+
+        SearchResult(String text, int matches, int scanned) {
+            this.text = text;
+            this.matches = matches;
+            this.scanned = scanned;
+        }
+    }
+
+    /**
+     * 关键字搜索（大小写不敏感，扫描整个内存缓冲）。逻辑在 {@link LogSearch}（可单测）。
+     *
+     * @param maxMatches 最多返回多少条匹配行（防止一次渲染几十万字符）
+     */
+    public SearchResult search(String query, int maxMatches) {
+        LogSearch.Result r;
+        synchronized (lines) {
+            r = LogSearch.search(lines, query, maxMatches);
+        }
+        return new SearchResult(r.text, r.matches, r.scanned);
+    }
+
     /** 把内存缓冲整体补写进文件（文件缺失/被清空时用，保证导出/分享必有内容）。 */
     public void dumpToFile() {
         String all = all();

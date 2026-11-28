@@ -904,6 +904,39 @@
                                 android:textStyle="bold" />
                         </LinearLayout>
 
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <EditText
+                                android:id="@+id/log_search"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:background="@drawable/bg_code"
+                                android:hint="@string/log_search_hint"
+                                android:inputType="text"
+                                android:maxLines="1"
+                                android:paddingStart="10dp"
+                                android:paddingTop="6dp"
+                                android:paddingEnd="10dp"
+                                android:paddingBottom="6dp"
+                                android:textColor="@color/text"
+                                android:textColorHint="@color/text_muted"
+                                android:textSize="13sp" />
+
+                            <TextView
+                                android:id="@+id/log_search_count"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="8dp"
+                                android:textColor="@color/text_muted"
+                                android:textSize="12sp" />
+                        </LinearLayout>
+
                         <ScrollView
                             android:id="@+id/log_scroll"
                             android:layout_width="match_parent"

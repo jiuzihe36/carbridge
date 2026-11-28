@@ -86,6 +86,10 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
     private final List<String> logLines = new ArrayList<String>();
     private final SimpleDateFormat clock = new SimpleDateFormat("HH:mm:ss", Locale.US);
     private TextView stateView, detailView, logView;
+    /** 日志搜索：输入即过滤（空 = 显示尾部 250 行）。 */
+    private android.widget.EditText logSearch;
+    private TextView logSearchCount;
+    private volatile String logQuery = "";
     private TextView btnConnect, logHeader;
     private TextView badgeView, metricFps, metricResolution, metricBitrate;
     private LinearLayout stepsContainer;
@@ -201,6 +205,18 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
         stateView = (TextView) findViewById(R.id.state);
         detailView = (TextView) findViewById(R.id.detail);
         logView = (TextView) findViewById(R.id.log);
+        logSearch = (android.widget.EditText) findViewById(R.id.log_search);
+        logSearchCount = (TextView) findViewById(R.id.log_search_count);
+        if (logSearch != null) {
+            logSearch.addTextChangedListener(new android.text.TextWatcher() {
+                @Override public void beforeTextChanged(CharSequence s, int st, int c, int a) { }
+                @Override public void onTextChanged(CharSequence s, int st, int b, int c) { }
+                @Override public void afterTextChanged(android.text.Editable s) {
+                    logQuery = s == null ? "" : s.toString().trim();
+                    renderLogTail();
+                }
+            });
+        }
         btnConnect = (TextView) findViewById(R.id.btn_connect);
         logHeader = (TextView) findViewById(R.id.log_header);
         logBody = findViewById(R.id.log_body);
@@ -2093,14 +2109,30 @@ public class MainActivity extends Activity implements HuClient.Sink, CarPlayBrid
             }
         }, 200);
     }
-    /** 只渲染尾部 LOG_UI_TAIL 行。 */
+    /** 只渲染尾部 LOG_UI_TAIL 行；有搜索词时只渲染匹配行 + 计数。 */
     private void renderLogTail() {
-        logView.setText(sessionLog().tail(SessionLog.UI_TAIL));
+        String q = logQuery;
+        if (q == null || q.trim().isEmpty()) {
+            logView.setText(sessionLog().tail(SessionLog.UI_TAIL));
+            if (logSearchCount != null) logSearchCount.setText("");
+        } else {
+            SessionLog.SearchResult r = sessionLog().search(q, 500);
+            if (r.matches == 0) {
+                logView.setText(getString(R.string.log_search_none, r.scanned));
+                if (logSearchCount != null) logSearchCount.setText("");
+            } else {
+                logView.setText(r.text);
+                if (logSearchCount != null) {
+                    logSearchCount.setText(getString(R.string.log_search_count, r.matches, r.scanned));
+                }
+            }
+        }
         if (logOpen) {
-            logScroll.post(new Runnable() {
+            final ScrollView sv = logScroll;
+            sv.post(new Runnable() {
                 @Override
                 public void run() {
-                    logScroll.fullScroll(ScrollView.FOCUS_DOWN);
+                    sv.fullScroll(ScrollView.FOCUS_DOWN);
                 }
             });
         }

@@ -30,6 +30,7 @@ public final class SelfTests {
         geometry();
         adaptive();
         csm();
+        logSearch();
         identityName();
         link();
         mfi();
@@ -252,6 +253,29 @@ public final class SelfTests {
         for (int i = 0; i < 9; i++) profiles[i * 2 + 1] = (byte) i;
         Iap2Csm.Param pp = Iap2Csm.find(Iap2Csm.parseParams(Iap2Csm.param(1, profiles)), 1);
         check(pp != null && pp.value.length == 18, "0x4E04 profile 表 9 项（第 19 批）");
+    }
+
+    // ---------------------------------------------------------------- 日志搜索
+    private static void logSearch() {
+        section("LogSearch（日志搜索）");
+        java.util.List<String> lines = java.util.Arrays.asList(
+                "10:00:01 ✓ CarPlay SDP 信标已注册（4 条）",
+                "10:00:02 收到 0x4301 CarPlayStartSession",
+                "10:00:03 mfi 认证中",
+                "10:00:04 收到 0x4301 重复",
+                null);
+        com.carbridge.app.LogSearch.Result r =
+                com.carbridge.app.LogSearch.search(lines, "0x4301", 100);
+        check(r.matches == 2 && r.scanned == 4, "关键字命中 2 行（null 行跳过）");
+        check(r.text.contains("CarPlayStartSession") && r.text.contains("重复"), "匹配行文本拼好");
+        check(com.carbridge.app.LogSearch.search(lines, "MFI", 100).matches == 1,
+                "大小写不敏感");
+        check(com.carbridge.app.LogSearch.search(lines, "  ", 100).matches == 0,
+                "空白查询不匹配");
+        com.carbridge.app.LogSearch.Result capped =
+                com.carbridge.app.LogSearch.search(lines, "0x4301", 1);
+        check(capped.matches == 2 && capped.text.split("\n").length == 1,
+                "maxMatches 只限制文本条数、统计仍是全量");
     }
 
     // ---------------------------------------------------------------- 身份名
