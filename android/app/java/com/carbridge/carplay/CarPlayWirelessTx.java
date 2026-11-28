@@ -947,12 +947,15 @@ public final class CarPlayWirelessTx {
             });
         }
         int ctrlPort = ctrlServer.start(CtrlIntServer.DEFAULT_PORT);
-        if (ctrlPort < 0) {
-            ctrlPort = CtrlIntServer.DEFAULT_PORT;   // 起不来也要广播，让车机来连（会失败，但有日志）
-        }
         // 本轮会话的版本号：TXT 与 RTSP/SETUP 用同一个值（改完设置不用重启 App）
         CarPlayCtrlCompat.apply(ctx);
-        mdns.advertiseCtrl(ctrlPort, realBtMac, CarPlayCtrlCompat.srcvers(ctx));
+        if (ctrlPort > 0) {
+            // 只广播**实际绑定**的端口：以前绑定失败也广播 7100，车机反连必失败，
+            // 现场只看到「服务起不来」而看不出是端口问题。
+            mdns.advertiseCtrl(ctrlPort, realBtMac, CarPlayCtrlCompat.srcvers(ctx));
+        } else {
+            log("⚠ ctrl-int 未起监听 → 不广播 _carplay-ctrl（车机反连会失败，AirPlay 主链路不受影响）");
+        }
         airplayPrefix = MdnsCarPlay.localPrefix(parseAddr(localIp));
         mdns.discoverAirPlay(airplayPrefix);
         // 入网完成 → 收掉 EIR 扫描（信息拿到了就别占着蓝牙射频）

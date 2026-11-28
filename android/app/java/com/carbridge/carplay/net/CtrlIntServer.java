@@ -47,15 +47,36 @@ public final class CtrlIntServer {
         this.listener = listener;
     }
 
-    /** 启动监听。返回实际绑定的端口（失败返回 -1）。 */
+    /** 启动监听。返回实际绑定的端口（失败返回 -1）。
+     *
+     *  <p>端口回退（OpenCarLink/DiPlay 做法）：默认端口被占时试 7101..7110，
+     *  再不行用临时端口。**绝不**在没绑上的情况下回报默认端口 —— 车机反连
+     *  必失败，而日志只会写「服务起不来」。
+     */
     public int start(int port) {
         // ⚠️ 重入必须返回**实际绑定**的端口，不能回入参：改动态端口时两者不同，
         //    mDNS 会把错端口广播给车机，反连必失败。
         if (running) return server != null ? server.getLocalPort() : port;
-        try {
-            server = new ServerSocket(port, 4, InetAddress.getByName("0.0.0.0"));
-        } catch (Throwable t) {
-            listener.onLog("ctrl-int 服务启动失败（端口 " + port + "）：" + t);
+        int[] candidates = new int[12];
+        candidates[0] = port;
+        for (int i = 1; i <= 10; i++) candidates[i] = port + i;
+        candidates[11] = 0;   // 0 = 系统临时端口
+        Throwable lastErr = null;
+        for (int p : candidates) {
+            try {
+                server = new ServerSocket(p, 4, InetAddress.getByName("0.0.0.0"));
+                if (p != port) {
+                    listener.onLog("ctrl-int 默认端口 " + port + " 不可用，回退到 "
+                            + server.getLocalPort());
+                }
+                break;
+            } catch (Throwable t) {
+                lastErr = t;
+            }
+        }
+        if (server == null) {
+            listener.onLog("ctrl-int 服务启动失败（" + port + ".." + (port + 10)
+                    + " 及临时端口全不可用）：" + lastErr);
             return -1;
         }
         running = true;

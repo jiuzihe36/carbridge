@@ -496,6 +496,7 @@ public final class AirPlaySession {
 
     /** 关闭本轮打开的全部 socket/编码器（不触碰状态机）。stop() 与失败清理共用。 */
     private void closeAllResources() {
+        stopVideoWriter();
         closeQuietly(control);
         // 同实例再 start() 时不能沿用上一轮的解密流（它绑在旧 socket 上）
         controlPlain = null;
@@ -1503,7 +1504,7 @@ public final class AirPlaySession {
             synchronized (videoSendLock) {
                 // 新建流或新拿到 SPS+PPS → 先发一次配置，解码器才能起
                 if (configDirty && cachedAvcC != null) {
-                    sendVideoPacket(VideoPackets.videoConfig(cachedW, cachedH, cachedAvcC));
+                    enqueueVideo(VideoPackets.videoConfig(cachedW, cachedH, cachedAvcC));
                     configDirty = false;
                     log("已发 OP_VIDEO_CONFIG avcC=" + cachedAvcC.length + "B " + cachedW + "x" + cachedH);
                 }
@@ -1518,12 +1519,12 @@ public final class AirPlaySession {
                 long ntp = ntpTimestamp();
                 long t0 = System.nanoTime();
                 if (videoSealer != null) {
-                    sendVideoPacket(VideoPackets.videoFrameSealed(avcc, ntp, videoSealer));
+                    enqueueVideo(VideoPackets.videoFrameSealed(avcc, ntp, videoSealer));
                 } else {
                     if (videoCrypto != null) {
                         avcc = videoCrypto.process(avcc);
                     }
-                    sendVideoPacket(VideoPackets.videoFrame(avcc, ntp));
+                    enqueueVideo(VideoPackets.videoFrame(avcc, ntp));
                 }
                 trackVideoLatency(System.nanoTime() - t0);
             }
@@ -1924,6 +1925,126 @@ public final class AirPlaySession {
 
     /** 视频通道输出流缓存（每帧 getOutputStream 会多一次分配）。 */
     private OutputStream videoOut;
+
+    // ============================================================ 视频写队列
+    //
+    // 参考实现（hypercar / playport）的共同结论：Car+ 读线程不能直接阻塞写车机。
+    // 车机 Wi-Fi 一慢，写就阻塞 → Car+ 侧反压 → 积压的帧越来越旧 → 延迟越拖越大，
+    // 最后要么 8s 看门狗拆链、要么推出去的是一堆过期画面。
+    // 做法：生产（读线程）只入队；消费（专写线程）按序写。队列按**时间预算**丢弃：
+    //   超限 → 整段清空 + 重置等 IDR + 向上游催关键帧（参考链已断，P 帧没意义）。
+    private static final int VIDEO_QUEUE_MAX_FRAMES = 48;          // ≈1.6s @30fps 的硬上限
+    private static final long VIDEO_QUEUE_MAX_BYTES = 12L * 1024 * 1024;
+    private static final long VIDEO_FRAME_MAX_AGE_MS = 300L;       // 时间预算：超过 300ms 的帧不再推
+    private final Object videoQueueLock = new Object();
+    private final java.util.ArrayDeque<byte[]> videoQueue = new java.util.ArrayDeque<byte[]>();
+    private final java.util.ArrayDeque<Long> videoQueueAt = new java.util.ArrayDeque<Long>();
+    private long videoQueueBytes;
+    private Thread videoWriter;
+    private volatile boolean videoWriterRunning;
+    private int videoQueueDrops;
+    private int videoStaleDrops;
+
+    /** 生产侧：入队（<5µs），真正的写在 airplay-video-writer 线程。 */
+    private void enqueueVideo(byte[] packet) {
+        if (packet == null) return;
+        boolean overflow = false;
+        synchronized (videoQueueLock) {
+            if (videoQueue.size() >= VIDEO_QUEUE_MAX_FRAMES
+                    || videoQueueBytes + packet.length > VIDEO_QUEUE_MAX_BYTES) {
+                videoQueue.clear();
+                videoQueueAt.clear();
+                videoQueueBytes = 0;
+                overflow = true;
+            } else {
+                videoQueue.addLast(packet);
+                videoQueueAt.addLast(System.currentTimeMillis());
+                videoQueueBytes += packet.length;
+                ensureVideoWriter();
+                videoQueueLock.notifyAll();
+            }
+        }
+        if (overflow) {
+            videoQueueDrops++;
+            if (videoQueueDrops == 1 || videoQueueDrops % 20 == 0) {
+                log("视频写队列超限 → 丢弃整段积压（第 " + videoQueueDrops + " 次），重置等 IDR");
+            }
+            // 积压被丢掉 = 参考链已断：P 帧推过去也解不出，等下一个 IDR 并向上游催
+            waitingForKeyFrame = true;
+            configDirty = true;
+            try {
+                listener.onForceKeyFrame();
+            } catch (Throwable tDiag) {
+                Diag.w("AirPlaySession.onForceKeyFrame", tDiag);
+            }
+        }
+    }
+
+    private void ensureVideoWriter() {
+        if (videoWriter != null) return;
+        videoWriterRunning = true;
+        Thread t = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                while (videoWriterRunning) {
+                    byte[] packet;
+                    long at;
+                    synchronized (videoQueueLock) {
+                        if (videoQueue.isEmpty()) {
+                            try {
+                                videoQueueLock.wait(200);
+                            } catch (InterruptedException ie) {
+                                return;
+                            }
+                            continue;
+                        }
+                        packet = videoQueue.pollFirst();
+                        Long ts = videoQueueAt.pollFirst();
+                        at = ts == null ? 0L : ts;
+                        videoQueueBytes -= packet.length;
+                    }
+                    if (System.currentTimeMillis() - at > VIDEO_FRAME_MAX_AGE_MS) {
+                        // 时间预算外：推出去只会让延迟越滚越大，丢弃并重新等 IDR
+                        videoStaleDrops++;
+                        if (videoStaleDrops == 1 || videoStaleDrops % 20 == 0) {
+                            log("视频帧积压超 " + VIDEO_FRAME_MAX_AGE_MS + "ms → 丢弃（第 "
+                                    + videoStaleDrops + " 帧），重置等 IDR");
+                        }
+                        waitingForKeyFrame = true;
+                        configDirty = true;
+                        try {
+                            listener.onForceKeyFrame();
+                        } catch (Throwable tDiag) {
+                            Diag.w("AirPlaySession.onForceKeyFrame", tDiag);
+                        }
+                        continue;
+                    }
+                    try {
+                        sendVideoPacket(packet);
+                    } catch (Throwable e) {
+                        videoBroken = true;
+                        log("视频写线程退出（通道已断）: " + e);
+                        return;
+                    }
+                }
+            }
+        }, "airplay-video-writer");
+        t.setDaemon(true);
+        videoWriter = t;
+        t.start();
+    }
+
+    /** 会话收尾：停写线程 + 清队列（在 closeAllResources 里调用）。 */
+    private void stopVideoWriter() {
+        videoWriterRunning = false;
+        synchronized (videoQueueLock) {
+            videoQueue.clear();
+            videoQueueAt.clear();
+            videoQueueBytes = 0;
+            videoQueueLock.notifyAll();
+        }
+        videoWriter = null;
+    }
 
     private void sendVideoPacket(byte[] packet) throws IOException {
         // ⚠️ 必须自己拿锁：视频线程在 synchronized(videoSendLock) 里调它，但
