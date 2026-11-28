@@ -222,6 +222,35 @@ public final class SelfTests {
         byte[] half2 = java.util.Arrays.copyOfRange(frame, 4, frame.length);
         check(p.feed(half1).isEmpty(), "半包不吐消息");
         check(p.feed(half2).size() == 1, "补全后吐出一条");
+
+        // 0x1D01 transport 组件编码（第 19 批）：组内 TLV 必须能原样解回
+        byte[] idBody = Iap2Csm.concat(
+                Iap2Csm.group(17,
+                        Iap2Csm.paramUInt(0, 1, 2),
+                        Iap2Csm.paramString(1, "IAP2-Bluetooth"),
+                        Iap2Csm.u8(2, 1),
+                        Iap2Csm.paramString(3, "AA:BB:CC:DD:EE:FF")),
+                Iap2Csm.group(24,
+                        Iap2Csm.paramUInt(0, 2, 2),
+                        Iap2Csm.paramString(1, "IAP2-Wireless"),
+                        Iap2Csm.u8(2, 1),
+                        Iap2Csm.u8(3, 1)));
+        List<Iap2Csm.Param> idParams = Iap2Csm.parseParams(idBody);
+        Iap2Csm.Param btComp = Iap2Csm.find(idParams, 17);
+        Iap2Csm.Param wlComp = Iap2Csm.find(idParams, 24);
+        check(btComp != null && wlComp != null, "0x1D01 含蓝牙/无线 transport 组件");
+        List<Iap2Csm.Param> btSub = btComp.asNested();
+        check(btSub.size() == 4, "蓝牙组件 4 个子项");
+        check("IAP2-Bluetooth".equals(Iap2Csm.find(btSub, 1).asString()),
+                "蓝牙组件名字 IAP2-Bluetooth");
+        check("AA:BB:CC:DD:EE:FF".equals(Iap2Csm.find(btSub, 3).asString()),
+                "蓝牙组件带真实 MAC");
+
+        // 0x4E04：9 条 profile 的 u16 数组
+        byte[] profiles = new byte[18];
+        for (int i = 0; i < 9; i++) profiles[i * 2 + 1] = (byte) i;
+        Iap2Csm.Param pp = Iap2Csm.find(Iap2Csm.parseParams(Iap2Csm.param(1, profiles)), 1);
+        check(pp != null && pp.value.length == 18, "0x4E04 profile 表 9 项（第 19 批）");
     }
 
     // ---------------------------------------------------------------- 链路层

@@ -586,12 +586,28 @@ public final class Iap2SenderSession {
         log("应答 MediaLibraryUpdate (0x4C04) uid=1 rev=1");
     }
 
-    /** 0x4E03 → 0x4E04：蓝牙组件 1，没有已连接的 profile。 */
+    /**
+     * 0x4E03 → 0x4E04：报「本机当前连着的蓝牙 profile」。
+     *
+     * <p>盒子固件实证（audit10/C-13）：真 iPhone 会按序枚举九个 profile
+     * （HFP / PBAP / AVRCP / A2DP / HID / iAP2 / PAN-NAP / MAP / PAN-client）。
+     * 我们以前回**空表** —— 在「按 profile 判能力」的车机上等价于「这台手机没有蓝牙功能」。
+     * 车机的 CarPlay 界面正靠这张表决定来电/短信/媒体图标是否可用。
+     *
+     * <p>编码：bluetoothComponentIdentifier(u16)=1，connectedBluetoothProfiles 为
+     * u16 数组（按 iAP2 枚举顺序 0..8）。车机不认就忽略，不影响主链路。
+     */
     private void answerBluetoothConnections() {
+        byte[] profiles = new byte[9 * 2];
+        for (int i = 0; i < 9; i++) {
+            profiles[i * 2] = 0;                    // 高字节
+            profiles[i * 2 + 1] = (byte) i;         // 低字节：profile id
+        }
         engine.sendCsm(Iap2Ids.BLUETOOTH_CONNECTION_UPDATE, Iap2Csm.concat(
                 Iap2Csm.paramUInt(0, 1, 2),     // BluetoothTransportComponentIdentifier = 1
-                Iap2Csm.param(1, new byte[0]))); // ConnectedBluetoothProfiles = 空
-        log("应答 BluetoothConnectionUpdate (0x4E04) component=1 profiles=空");
+                Iap2Csm.param(1, profiles)));   // ConnectedBluetoothProfiles = 9 项
+        log("应答 BluetoothConnectionUpdate (0x4E04) component=1 profiles=9 项"
+                + "（HFP/PBAP/AVRCP/A2DP/HID/iAP2/PAN-NAP/MAP/PAN-client）");
     }
 
     // ---------------------------------------------------------------- 识别
@@ -711,7 +727,14 @@ public final class Iap2SenderSession {
                 + identificationSerial() + "）");
     }
 
-    /** 手机侧 0x1D01：最小但完整的 iPhone 身份（cplink-probe 已验证车机认）。 */
+    /** 手机侧 0x1D01：iPhone 身份 + **transport 组件表**（真 iPhone 一定带，我们以前只发身份串）。
+     *
+     * <p>盒子固件（audit9/dec/ 反汇编，audit10/B）实证：iPhone 角色的 IdentifyInfo 里
+     * 并列三条 transport 组件（USBHost id=0 / Bluetooth id=1 / Wireless id=2），
+     * 每条带「标识/名字/supports-iAP2/MAC」四个子项；「支持无线 CarPlay」不是单独布尔，
+     * 而是 **wireless 组存在与否** 表达的。车机侧解析组件表决定 0x5702/0x5703 与 0x4301 的时序，
+     * 我们以前完全不发组件 → 车机只能靠猜。
+     */
     private byte[] buildOurIdentification() {
         return Iap2Csm.concat(
                 Iap2Csm.paramString(Iap2Ids.Id.NAME, "iPhone"),
@@ -721,7 +744,22 @@ public final class Iap2SenderSession {
                 Iap2Csm.paramString(Iap2Ids.Id.FIRMWARE_VERSION, "27.1"),
                 Iap2Csm.paramString(Iap2Ids.Id.HARDWARE_VERSION, "iPhone19,4"),
                 Iap2Csm.paramString(Iap2Ids.Id.LANGUAGE, "zh-CN"),
-                Iap2Csm.paramString(Iap2Ids.Id.LANGUAGE_LIST, "zh-CN"));
+                Iap2Csm.paramString(Iap2Ids.Id.LANGUAGE_LIST, "zh-CN"),
+                // 供电能力：手机不向车机供电（0=无）
+                Iap2Csm.paramUInt(8, 0, 1),
+                // 蓝牙 transport 组件（id=1）：名字 + supports iAP2 + 本机真实蓝牙 MAC。
+                // MAC 必须与 hci0 一致 —— 车机的重连/去重按它索引。
+                Iap2Csm.group(Iap2Ids.Id.BLUETOOTH_TRANSPORT_COMPONENT,
+                        Iap2Csm.paramUInt(0, 1, 2),                       // transportComponentIdentifier
+                        Iap2Csm.paramString(1, "IAP2-Bluetooth"),         // transportComponentName
+                        Iap2Csm.u8(2, 1),                                 // transportSupportsiAP2Connection
+                        Iap2Csm.paramString(3, deviceMac == null ? "" : deviceMac)),
+                // 无线 CarPlay transport 组件（id=2）：**它的存在就是「支持无线」的声明**
+                Iap2Csm.group(Iap2Ids.Id.WIRELESS_CARPLAY_COMPONENT,
+                        Iap2Csm.paramUInt(0, 2, 2),
+                        Iap2Csm.paramString(1, "IAP2-Wireless"),
+                        Iap2Csm.u8(2, 1),                                 // transportSupportsiAP2Connection
+                        Iap2Csm.u8(3, 1)));                               // transportSupportsCarPlay
     }
 
     /**
